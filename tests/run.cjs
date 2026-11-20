@@ -1103,15 +1103,6 @@ test('share link: a design survives the trip through a link into another browser
   eq(await t.evaluate(() => document.querySelector('#linkOpenDialog').open), false, 'asked although the design there was empty');
   await t.ctx.close();
 });
-test('share link: too detailed a design says to save the file instead', async (p) => {
-  await p.evaluate(() => {
-    const pal = __pindou.S.palette; const w = 300, h = 300;
-    __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'noise', palette: __pindou.S.paletteId, tray: 52, w, h, legend: pal.map((c) => c.code), cells: Array.from({ length: w * h }, () => (Math.random() * pal.length) | 0) });
-  });
-  await p.click('[data-action=share-link]'); await p.waitForTimeout(500);
-  eq(await p.evaluate(() => document.querySelector('#linkDialog').open), false, 'offered a link anyway');
-  assert(/too detailed to fit in a link.*Save/.test(await p.textContent('#toastText')), 'no "save the file" message');
-});
 test('share link: opening one over a design asks first; Keep mine changes nothing', async (p, browser) => {
   await stroke(p, 8);
   const url = await shareUrl(p);
@@ -1560,6 +1551,201 @@ test('QR: a stroke that gets cancelled (pinch, hand-over) leaves no beads in the
   eq(await beads(p), 3, 'beads after the cancelled stroke');
   const n = await p.evaluate(async () => (await __pindou.unpackDesign((await __pindou.currentLink()).split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length);
   eq(n, 3, 'beads in the QR link');
+});
+// ---------- 1.3: a simpler version for long links ----------
+const shareOpen = async (p) => { await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open); };
+const simpleReady = (p) => p.waitForFunction(() => /characters|too long/.test(document.querySelector('#linkSimpleLen').textContent), null, { timeout: 20000 });
+// a converted-looking design: smooth regions with speckled edges and many colors
+const speckled = (p, n) => p.evaluate((n) => {
+  const pal = __pindou.S.palette, cells = new Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const base = Math.floor((x / n) * 8) * 6 + Math.floor((y / n) * 6);
+    cells[y * n + x] = Math.random() < 0.15 ? (Math.random() * pal.length) | 0 : base % pal.length;
+  }
+  __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'speckled', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.map((c) => c.code), cells });
+}, n);
+
+test('short links: a short link offers no simpler version', async (p) => {
+  await stroke(p, 6); await shareOpen(p);
+  eq(await p.evaluate(() => document.querySelector('#linkSimpler').hidden), true, 'simpler section shown');
+});
+test('short links: a long link offers a simpler version that fits, without changing the design', async (p, browser) => {
+  await speckled(p, 80);
+  const before = await design(p);
+  await shareOpen(p);
+  eq(await p.evaluate(() => document.querySelector('#linkSimpler').hidden), false, 'no simpler section');
+  const origLen = (await p.inputValue('#linkText')).length;
+  assert(origLen > 2000, 'test design gave a short link: ' + origLen);
+  await simpleReady(p);
+  await p.check('#linkWhichSimple');
+  const simple = await p.inputValue('#linkText');
+  assert(simple.length <= 2000, 'suggested version is ' + simple.length + ' characters');
+  eq(await design(p), before, 'design changed by choosing the simpler link');
+  // the simpler link opens the simpler design elsewhere
+  const t = await openLink(browser, simple.replace(PUBLIC_URL, p.url().split('#')[0]));
+  const colors = await t.evaluate(() => new Set(__pindou.S.cells.filter((v) => v >= 0 && !__pindou.S.palette[v].transparent)).size);
+  eq(String(colors), (await p.textContent('#linkSimpleLen')).match(/(\d+) colors?/)[1], 'colors in the opened simpler design');
+  await t.ctx.close();
+  // back to the original
+  await p.check('#linkWhichOrig');
+  eq((await p.inputValue('#linkText')).length, origLen, 'original link again');
+});
+test('short links: the colors slider and clean-up switch change the link', async (p) => {
+  await speckled(p, 80);
+  await shareOpen(p); await simpleReady(p); await p.check('#linkWhichSimple');
+  const a = (await p.inputValue('#linkText')).length;
+  const newLink = (prev) => p.waitForFunction((prev) => { const v = document.querySelector('#linkText').value; return v && v.length !== prev; }, prev, { timeout: 10000 });
+  await p.fill('#linkColors', '2'); await newLink(a);
+  const b = (await p.inputValue('#linkText')).length;
+  eq(await p.textContent('#linkColorsOut'), '2', 'colors shown');
+  eq(await p.evaluate(async () => new Set((await __pindou.unpackDesign(document.querySelector('#linkText').value.split('#pattern=')[1])).state.cells.filter((v) => v >= 0 && !__pindou.S.palette[v].transparent)).size), 2, 'colors in the link');
+  await p.uncheck('#linkClean'); await newLink(b);
+  assert((await p.inputValue('#linkText')).length > b, 'clean-up off should make a longer link');
+});
+test('short links: a design too detailed for any link can still share a simpler version', async (p) => {
+  await p.evaluate(() => {
+    const pal = __pindou.S.palette; const w = 300, h = 300;
+    __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'noise', palette: __pindou.S.paletteId, tray: 52, w, h, legend: pal.map((c) => c.code), cells: Array.from({ length: w * h }, () => (Math.random() * pal.length) | 0) });
+  });
+  await shareOpen(p);
+  eq(await p.isDisabled('#linkWhichOrig'), true, 'the too-long original offered');
+  eq(await p.isChecked('#linkWhichSimple'), true, 'simpler version not chosen');
+  await simpleReady(p);
+  const url = await p.inputValue('#linkText');
+  assert(url.length > 0 && url.length <= await p.evaluate(() => __pindou.LINK_MAX), 'link ' + url.length);
+});
+test('short links: "use it in my design too" is one undo step', async (p) => {
+  await speckled(p, 80);
+  const before = await design(p);
+  await shareOpen(p); await simpleReady(p); await p.check('#linkWhichSimple');
+  const simpleLink = await p.inputValue('#linkText');
+  await p.click('#linkApply');
+  await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+  await p.waitForTimeout(300);
+  const now = await p.evaluate(() => new Set(__pindou.S.cells.filter((v) => v >= 0)).size);
+  eq(String(now), await p.evaluate(async (u) => String(new Set((await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0)).size), simpleLink), 'design now uses the simpler version');
+  await p.click('#linkDialog button[value=close]');
+  await p.keyboard.press('Control+z');
+  eq(await design(p), before, 'Undo');
+});
+test('short links: stray single beads are removed, lines and blocks are kept', async (p) => {
+  const r = await p.evaluate(() => {
+    // 5×5 of color 0, with a lone bead of 1 in the middle, and a 2-bead line of 2 at the top
+    const w = 5, h = 5, c = new Array(25).fill(0);
+    c[12] = 1; c[1] = 2; c[2] = 2;
+    return Array.from(__pindou.removeStrays(Int16Array.from(c), w, h));
+  });
+  eq(r[12], 0, 'lone bead');
+  eq([r[1], r[2]], [2, 2], 'two touching beads');
+});
+test('short links: the suggestion is the most colors that fit, even when fewer colors make a longer link', async (p) => {
+  // specks two beads wide (clean-up keeps them), in many colors: all of them don't fit
+  await p.evaluate(() => {
+    const pal = __pindou.S.palette.filter((c) => !c.transparent), n = 120, cells = new Array(n * n);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) cells[y * n + x] = (Math.floor((x / n) * 6) * 5 + Math.floor((y / n) * 5)) % pal.length;
+    for (let k = 0; k < 400; k++) { const x = (Math.random() * (n - 2)) | 0, y = (Math.random() * (n - 2)) | 0, v = (Math.random() * pal.length) | 0; for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) cells[(y + dy) * n + x + dx] = v; }
+    __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'blobs', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.map((c) => c.code), cells });
+  });
+  await shareOpen(p); await simpleReady(p); await p.check('#linkWhichSimple');
+  const k = +(await p.textContent('#linkColorsOut'));
+  assert(k < +(await p.getAttribute('#linkColors', 'max')), 'every color already fit: nothing to search');
+  const len = (await p.inputValue('#linkText')).length;
+  assert(len <= 2000, 'suggested link ' + len);
+  // every count the search tries above k makes a link that doesn't fit
+  const over = await p.evaluate(async (k) => {
+    const S = __pindou.S, n = +document.querySelector('#linkColors').max, base = 'https://dani-the-alien.github.io/pindou-studio/#pattern=';
+    const fits = [];
+    for (const t of __pindou.simplerTries(n)) if (t > k) {
+      const cells = __pindou.simplifyCells(S.cells, S.w, S.h, t, true);
+      const url = base + await __pindou.packDesign(__pindou.serialize(cells));
+      if (url.length <= 2000) fits.push(t);
+    }
+    return fits;
+  }, k);
+  eq(over, [], 'larger counts that would also have fitted');
+});
+test('short links: fewer colors move each dropped color to its nearest kept one', async (p) => {
+  const r = await p.evaluate(() => {
+    const S = __pindou.S, code = (c) => S.palette.findIndex((x) => x.code === c);
+    // lots of H7 (black), a little H2-ish white, and one near-black that should merge into black
+    const black = code('H7'), white = code('H2'), near = code('H6');
+    const cells = Int16Array.from([...new Array(40).fill(black), ...new Array(40).fill(white), near]);
+    const out = __pindou.simplifyCells(cells, 81, 1, 2, false);
+    return { kept: [...new Set(out)].sort(), black, white, nearTo: out[80] };
+  });
+  eq(r.kept, [r.black, r.white].sort(), 'kept colors');
+  eq(r.nearTo, r.black, 'near-black went to black');
+});
+
+test('short links: the merge order gives exactly what reduceColors keeps, for every count', async (p) => {
+  const bad = await p.evaluate(() => {
+    const counts = new Map(); for (let v = 0; v < 25; v++) counts.set(v * 3, 1 + ((v * 7919) % 97));
+    const order = __pindou.mergeOrder(counts), bad = [];
+    for (let k = 1; k <= 25; k++) {
+      const want = new Set(__pindou.reduceColors(counts, k));
+      const got = new Set([...counts.keys()].filter((v) => !order.slice(0, 25 - k).includes(v)));
+      if (want.size !== got.size || [...want].some((v) => !got.has(v))) bad.push(k);
+    }
+    return bad;
+  });
+  eq(bad, [], 'counts where they differ');
+});
+test('short links: clear beads stay clear, and white stays white', async (p) => {
+  const r = await p.evaluate(() => {
+    const S = __pindou.S, clear = S.palette.findIndex((c) => c.transparent);
+    const white = S.palette.findIndex((c) => !c.transparent && c.code === 'H2');
+    const others = S.palette.filter((c) => !c.transparent && c.i !== white).slice(0, 5).map((c) => c.i);
+    const cells = Int16Array.from([...new Array(30).fill(clear), ...new Array(300).fill(white), ...others.flatMap((o, k) => new Array(50 + k).fill(o))]);
+    const out = __pindou.simplifyCells(cells, cells.length, 1, 2, false);
+    // and clean-up: a lone clear bead in white, and a lone white bead in clear, stay
+    const g = (a, b) => Int16Array.from([a, a, a, a, b, a, a, a, a]);
+    const c1 = __pindou.simplifyCells(g(white, clear), 3, 3, 99, true)[4], c2 = __pindou.simplifyCells(g(clear, white), 3, 3, 99, true)[4];
+    return { clear, white, clearOut: out.slice(0, 30).every((v) => v === clear), whiteOut: out.slice(30, 330).every((v) => v === white), loneClear: c1 === clear, loneWhite: c2 === white };
+  });
+  assert(r.clear >= 0, 'palette has no clear bead');
+  eq([r.clearOut, r.whiteOut, r.loneClear, r.loneWhite], [true, true, true, true], '[clear kept, white kept, lone clear kept, lone white kept]');
+});
+test('short links: moving the slider at once never lets the old version be copied or applied', async (p) => {
+  await speckled(p, 80);
+  const before = await design(p);
+  await shareOpen(p); await simpleReady(p); await p.check('#linkWhichSimple');
+  await p.fill('#linkColors', '2');
+  eq([await p.inputValue('#linkText'), await p.isDisabled('#linkCopy'), await p.isDisabled('#linkApply')], ['', true, true], '[link, Copy disabled, Apply disabled] right after');
+  await p.waitForFunction(() => !document.querySelector('#linkApply').disabled, null, { timeout: 10000 });
+  await p.click('#linkApply'); await p.waitForTimeout(300);
+  eq(await p.evaluate(() => new Set(__pindou.S.cells.filter((v) => v >= 0 && !__pindou.S.palette[v].transparent)).size <= 2), true, 'applied the 2-color version');
+  assert(await design(p) !== before, 'design unchanged');
+});
+test('short links: when even the simplest version is too long, it says so', async (p) => {
+  await p.evaluate(() => {
+    const pal = __pindou.S.palette; const w = 624, h = 624;
+    __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'noise', palette: __pindou.S.paletteId, tray: 52, w, h, legend: pal.map((c) => c.code), cells: Array.from({ length: w * h }, () => (Math.random() * pal.length) | 0) });
+  });
+  await shareOpen(p); await simpleReady(p);
+  const len = await p.textContent('#linkSimpleLen');
+  assert(/still too long/.test(len), 'expected nothing to fit: ' + len);
+  assert(/Still too long for a link/.test(await p.textContent('#linkHint')), 'hint: ' + await p.textContent('#linkHint'));
+});
+test('short links: the colors slider has a name', async (p) => {
+  await speckled(p, 80); await shareOpen(p); await simpleReady(p); await p.check('#linkWhichSimple');
+  eq(await p.getByRole('slider', { name: 'At most this many colors:' }).count(), 1, 'named slider');
+});
+test('short links: an open QR code stays open when the suggestion arrives', async (p) => {
+  // a link over 2,000 characters that still fits a QR code
+  await p.evaluate(() => {
+    const pal = __pindou.S.palette, n = 62;
+    __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'dense', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.slice(0, 12).map((c) => c.code), cells: Array.from({ length: n * n }, () => (Math.random() * 12) | 0) });
+  });
+  // slow compression down, so the suggestion arrives after the QR code is opened
+  await p.evaluate(() => {
+    const C = window.CompressionStream;
+    window.CompressionStream = class { constructor(f) { const c = new C(f); this.writable = c.writable; this.readable = c.readable.pipeThrough(new TransformStream({ async transform(ch, ctl) { await new Promise((r) => setTimeout(r, 300)); ctl.enqueue(ch); } })); } };
+  });
+  await shareOpen(p);
+  await p.click('#linkQrBtn');
+  eq(await p.evaluate(() => /working/.test(document.querySelector('#linkSimpleLen').textContent)), true, 'suggestion already there before the QR was opened');
+  await simpleReady(p); await p.waitForTimeout(200);
+  eq(await p.evaluate(() => !document.querySelector('#linkQrBox').hidden), true, 'QR still shown');
 });
 // ---------- runner ----------
 (async () => {

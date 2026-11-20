@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.0'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.1'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -922,11 +922,11 @@
   }
 
   // ---------- persistence ----------
-  function serialize() {
+  function serialize(from = S.cells) {
     const used = new Map(); const legend = [];
-    const cells = new Array(S.cells.length);
-    for (let i = 0; i < S.cells.length; i++) {
-      const v = S.cells[i];
+    const cells = new Array(from.length);
+    for (let i = 0; i < from.length; i++) {
+      const v = from[i];
       if (v < 0) { cells[i] = -1; continue; }
       if (!used.has(v)) { used.set(v, legend.length); legend.push(S.palette[v].code); }
       cells[i] = used.get(v);
@@ -1115,30 +1115,40 @@
   const QR_MAX_NOTE = 'QR codes hold links up to about 2,900 characters';
   function clearLinkFromAddress() { history.replaceState(history.state, '', location.pathname + location.search); }
 
+  // What the Share dialog is offering: the design as it is, and (for long links) a
+  // simpler version with fewer colors and/or no stray single beads.
+  const share = { orig: null, simple: null, seq: 0, timer: null };
+  const linkFor = async (cells) => shareBase() + '#' + LINK_KEY + await packDesign(serialize(cells));
   async function shareLink() {
     if (!tab.editing) return;
     let url;
-    try { url = shareBase() + '#' + LINK_KEY + await packDesign(serialize()); }
+    try { url = await linkFor(S.cells); }
     catch { toast("This browser can't make pattern links. Use Save and share the file instead.", { sticky: true }); return; }
     if (!tab.editing) return;
-    if (url.length > LINK_MAX) {
-      toast(`This design is too detailed to fit in a link (it would be ${Math.round(url.length / 1000)} thousand characters; links hold up to ${LINK_MAX / 1000} thousand). Use Save and share the .pindou.json file instead.`, { sticky: true });
-      return;
-    }
-    $('#linkText').value = url;
-    $('#linkHint').textContent = url.length > LINK_LONG
-      ? `This link is long (${url.length.toLocaleString()} characters). Some chat apps and forms cut long links short; if it arrives broken, use Save and send the file instead.`
-      : `${url.length.toLocaleString()} characters.`;
-    $('#linkShare').hidden = !(navigator.share && (!navigator.canShare || navigator.canShare({ url })));
-    $('#linkCopyLabel').textContent = 'Copy link';
+    share.orig = url; share.simple = null; share.dropped = null; share.dist = null; share.busy = false; share.failed = false; share.seq++;
+    $('#linkText').value = ''; // so the first showLinkChoice() below fills everything in
+    const long = url.length > LINK_LONG;
+    $('#linkSimpler').hidden = !long;
     $('#linkLive').checked = linkLive;
     $('#linkLiveRow').hidden = !linkCodec;
-    const canQr = !!makeQr(url);
-    $('#linkQrBox').hidden = true; $('#linkQrBox').replaceChildren();
-    $('#linkQrBtn').disabled = !canQr;
-    $('#linkQrBtn').textContent = canQr ? 'Show QR code' : 'Too long for a QR code';
-    $('#linkQrBtn').title = canQr ? 'Show this link as a QR code to scan with a phone' : QR_MAX_NOTE;
+    if (long) {
+      const tooLong = url.length > LINK_MAX;
+      $('#linkWhyText').textContent = tooLong
+        ? `This design is too detailed for a link (${url.length.toLocaleString()} characters; links hold up to ${LINK_MAX.toLocaleString()}). A simpler version can fit, or use Save and share the file.`
+        : `This link is long (${url.length.toLocaleString()} characters): some chat apps and forms cut long links short, and QR codes hold up to about 2,900. A simpler version makes a shorter link.`;
+      $('#linkWhichOrig').disabled = tooLong;
+      $('#linkOrigLen').textContent = tooLong ? '(too long for a link)' : `(${url.length.toLocaleString()} characters)`;
+      $('#linkSimpleLen').textContent = '(working it out…)';
+      (tooLong ? $('#linkWhichSimple') : $('#linkWhichOrig')).checked = true;
+      const n = solidCounts(S.cells).size;
+      $('#linkColors').max = String(Math.max(2, n)); $('#linkColors').value = String(Math.max(2, n));
+      share.busy = true; showColorsValue();
+      $('#linkClean').checked = true;
+      drawBeads($('#linkPrevA'), S.cells, S.w, S.h);
+    }
+    showLinkChoice();
     showDialog($('#linkDialog'));
+    if (long) suggestSimpler();
     $('#linkText').select();
   }
   // "Keep this design's link in the address bar": then the browser's own bookmark
@@ -1184,6 +1194,186 @@
     if (state.w !== S.w || state.h !== S.h || state.paletteId !== S.paletteId || state.tray !== S.tray || name !== S.name) return false;
     for (let i = 0; i < state.cells.length; i++) if (state.cells[i] !== S.cells[i]) return false;
     return true;
+  }
+  // Show whichever link is chosen in the dialog (Copy, Share… and the QR code use it).
+  function showLinkChoice() {
+    const simple = !$('#linkSimpler').hidden && $('#linkWhichSimple').checked;
+    $('#linkSimpleCtl').hidden = !simple;
+    const url = simple ? (share.simple && share.simple.url) : share.orig;
+    const ok = !!url && url.length <= LINK_MAX;
+    $('#linkApply').disabled = !(simple && share.simple && !share.busy);
+    if (ok && url === $('#linkText').value) return; // same link: leave Copied ✓ and an open QR alone
+    $('#linkText').value = ok ? url : '';
+    $('#linkCopy').disabled = !ok;
+    $('#linkHint').textContent = !ok
+      ? (!simple ? ''
+        : share.failed ? "Couldn't make a simpler version here. Use Save and share the file instead."
+          : share.simple ? 'Still too long for a link: try fewer colors, or use Save and share the file.'
+            : 'Working out a simpler version…')
+      : url.length > LINK_LONG
+        ? `This link is long (${url.length.toLocaleString()} characters). Some chat apps and forms cut long links short; if it arrives broken, use Save and send the file instead.`
+        : `${url.length.toLocaleString()} characters.`;
+    $('#linkShare').hidden = !ok || !(navigator.share && (!navigator.canShare || navigator.canShare({ url })));
+    $('#linkCopyLabel').textContent = 'Copy link';
+    const canQr = ok && !!makeQr(url);
+    $('#linkQrBox').hidden = true; $('#linkQrBox').replaceChildren();
+    $('#linkQrBtn').disabled = !canQr;
+    $('#linkQrBtn').textContent = !ok || canQr ? 'Show QR code' : 'Too long for a QR code';
+    $('#linkQrBtn').title = canQr ? 'Show this link as a QR code to scan with a phone' : QR_MAX_NOTE;
+  }
+  // One bead per pixel, scaled up by CSS.
+  function drawBeads(cv, cells, w, h) {
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d'), img = g.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const v = cells[i], o = i * 4;
+      const rgb = v >= 0 ? (S.palette[v].transparent ? TRANSPARENT_RGB : S.palette[v].rgb) : (((i % w) + ((i / w) | 0)) & 1 ? [221, 221, 221] : [238, 238, 238]);
+      img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+  }
+  // A simpler copy of a design: at most `max` colors (merging the ones that cost least to
+  // lose, as image conversion does, then moving each dropped color to its nearest kept
+  // one), and optionally without stray single beads.
+  // Clear (transparent) beads are left as they are: they look like white on screen, but
+  // swapping clear plastic for white (or back) changes the piece.
+  function solidCounts(cells) {
+    const counts = new Map();
+    for (const v of cells) if (v >= 0 && !S.palette[v].transparent) counts.set(v, (counts.get(v) || 0) + 1);
+    return counts;
+  }
+  function simplifyCells(cells, w, h, max, clean, dropped, dist) {
+    let out = Int16Array.from(cells);
+    const counts = solidCounts(out);
+    if (counts.size > max) {
+      const gone = new Set((dropped || mergeOrder(counts)).slice(0, counts.size - max));
+      const kept = [...counts.keys()].filter((v) => !gone.has(v));
+      const d = dist || ((a, b) => Color.deltaE2000(S.palette[a].lab, S.palette[b].lab));
+      const to = new Map();
+      for (const v of counts.keys()) {
+        if (!gone.has(v)) { to.set(v, v); continue; }
+        let best = Infinity, into = v;
+        for (const k of kept) { const e = d(v, k); if (e < best) { best = e; into = k; } }
+        to.set(v, into);
+      }
+      for (let i = 0; i < out.length; i++) if (to.has(out[i])) out[i] = to.get(out[i]);
+    }
+    if (clean) out = removeStrays(out, w, h);
+    return out;
+  }
+  // A bead (or empty spot) unlike all of its up-to-8 neighbors takes their most common value.
+  // Clear beads are never changed, and never spread: clear plastic and white look alike.
+  function removeStrays(cells, w, h) {
+    const clear = (v) => v >= 0 && S.palette[v] && S.palette[v].transparent;
+    const out = Int16Array.from(cells);
+    const vals = new Int16Array(8), ns = new Uint8Array(8); // up to 8 neighbors: no Map per bead
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, v = cells[i];
+      if (clear(v)) continue;
+      let kinds = 0, same = false;
+      for (let dy = -1; dy <= 1 && !same; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const u = cells[ny * w + nx];
+        if (u === v) { same = true; break; }
+        if (clear(u)) continue;
+        let k = 0;
+        while (k < kinds && vals[k] !== u) k++;
+        if (k === kinds) { vals[k] = u; ns[k] = 0; kinds++; }
+        ns[k]++;
+      }
+      if (same || !kinds) continue;
+      let best = 0;
+      for (let k = 1; k < kinds; k++) if (ns[k] > ns[best]) best = k;
+      out[i] = vals[best];
+    }
+    return out;
+  }
+  function mergeOrder(counts) { const d = []; reduceColors(counts, 1, d); return d; }
+  async function makeSimpler(max, clean) {
+    if (!share.dropped) {
+      const counts = solidCounts(S.cells);
+      share.dropped = mergeOrder(counts);
+      // distances between the design's colors, worked out once for every try
+      const memo = new Map();
+      share.dist = (a, b) => { const key = a * 1024 + b; let e = memo.get(key); if (e === undefined) { e = Color.deltaE2000(S.palette[a].lab, S.palette[b].lab); memo.set(key, e); } return e; };
+    }
+    const cells = simplifyCells(S.cells, S.w, S.h, max, clean, share.dropped, share.dist);
+    return { cells, max, clean, url: await linkFor(cells), colors: solidCounts(cells).size }; // as the slider counts
+  }
+  const breathe = () => new Promise((r) => setTimeout(r, 0)); // let the page draw between tries
+  // The color counts tried for a suggestion, most first.
+  function simplerTries(n) {
+    const tries = new Set([n]);
+    for (let k = n; k > 8; k = Math.floor(k * 0.75)) tries.add(k);
+    for (let k = Math.min(n, 8); k >= 2; k--) tries.add(k);
+    return [...tries].sort((a, b) => b - a);
+  }
+  // On opening: the most colors that still give a link under LINK_LONG (with clean-up on).
+  // Fewer colors doesn't always mean a shorter link (merging can make more ragged edges),
+  // so a spread of counts is tried, most colors first; if none fits, the shortest is offered.
+  async function suggestSimpler() {
+    const seq = share.seq;
+    const n = +$('#linkColors').max;
+    let best = null, shortest = null;
+    share.busy = true;
+    try {
+      for (const k of simplerTries(n)) {
+        await breathe();
+        if (seq !== share.seq) return;
+        const r = await makeSimpler(k, true);
+        if (seq !== share.seq) return;
+        if (!shortest || r.url.length < shortest.url.length) shortest = r;
+        if (r.url.length <= LINK_LONG) { best = r; break; }
+      }
+    } catch {
+      if (seq === share.seq) { share.busy = false; share.failed = true; $('#linkSimpleLen').textContent = "(couldn't make one)"; showLinkChoice(); }
+      return;
+    }
+    share.busy = false;
+    best = best || shortest;
+    if (seq !== share.seq || !tab.editing) return;
+    $('#linkColors').value = String(best.max);
+    showSimpler(best);
+  }
+  function showColorsValue() {
+    const v = $('#linkColors').value;
+    $('#linkColorsOut').textContent = v;
+    $('#linkColors').setAttribute('aria-valuetext', `at most ${v} colors`);
+  }
+  function showSimpler(r) {
+    share.simple = r; share.busy = false;
+    showColorsValue();
+    const used = `${r.colors} color${r.colors === 1 ? '' : 's'}`;
+    $('#linkSimpleLen').textContent = r.url.length > LINK_MAX ? `(${used}; still too long for a link)` : `(${used}, ${r.url.length.toLocaleString()} characters)`;
+    drawBeads($('#linkPrevB'), r.cells, S.w, S.h);
+    showLinkChoice();
+  }
+  function onSimplerControls() {
+    clearTimeout(share.timer);
+    const seq = ++share.seq;
+    showColorsValue();
+    // the version on show no longer matches the controls: nothing may copy or apply it
+    share.simple = null; share.busy = true; share.failed = false;
+    $('#linkSimpleLen').textContent = '(working it out…)';
+    showLinkChoice();
+    share.timer = setTimeout(async () => {
+      let r;
+      try { r = await makeSimpler(+$('#linkColors').value, $('#linkClean').checked); }
+      catch { if (seq === share.seq) { share.busy = false; share.failed = true; $('#linkSimpleLen').textContent = "(couldn't make one)"; showLinkChoice(); } return; }
+      if (seq === share.seq && tab.editing && $('#linkDialog').open) showSimpler(r);
+    }, 120);
+  }
+  function applySimpler() {
+    const r = share.simple;
+    // only the version that matches the controls as they are now
+    if (!r || share.busy || !tab.editing || r.max !== +$('#linkColors').value || r.clean !== $('#linkClean').checked) return;
+    S.focus = null;
+    replaceState({ paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: r.cells }, 'Your design now uses the simpler version. Undo brings back the original.');
+    autosave();
+    $('#linkDialog').close();
+    shareLink(); // the design as it is now is the simpler one
   }
   function toggleLinkQr() {
     const box = $('#linkQrBox');
@@ -1955,7 +2145,9 @@
   // Drop colors one at a time, always removing the one that is cheapest to lose
   // (bead count × distance to its nearest surviving color). Unlike "keep the most
   // common N", this keeps small but distinct details such as eyes and outlines.
-  function reduceColors(counts, max) {
+  // `dropped`, if given, collects the colors in the order they were merged away (the same
+  // order for any `max`, so one run down to 2 gives the kept set for every count).
+  function reduceColors(counts, max, dropped) {
     const kept = new Map(counts);
     // Pairwise distances once up front (at most 291² of them) instead of every round.
     const ids = [...counts.keys()];
@@ -1975,6 +2167,7 @@
       }
       kept.set(into, kept.get(into) + kept.get(worst));
       kept.delete(worst);
+      if (dropped) dropped.push(worst);
     }
     return [...kept.keys()];
   }
@@ -2351,6 +2544,11 @@
     // open file
     $('#linkCopy').addEventListener('click', copyLink);
     $('#linkQrBtn').addEventListener('click', toggleLinkQr);
+    $$('input[name=linkWhich]').forEach((r) => r.addEventListener('change', showLinkChoice));
+    $('#linkColors').addEventListener('input', onSimplerControls);
+    $('#linkClean').addEventListener('change', onSimplerControls);
+    $('#linkApply').addEventListener('click', applySimpler);
+    $('#linkDialog').addEventListener('close', () => { share.seq++; clearTimeout(share.timer); });
     $('#linkLive').addEventListener('change', (e) => setLinkLive(e.target.checked));
     $('#linkShare').addEventListener('click', () => {
       navigator.share({ title: S.name, url: $('#linkText').value }).catch(() => { /* cancelled */ });
@@ -2580,6 +2778,6 @@
   let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, get tabReady() { return tabReady; } };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, simplifyCells, removeStrays, mergeOrder, reduceColors, simplerTries, get tabReady() { return tabReady; } };
   boot();
 })();
