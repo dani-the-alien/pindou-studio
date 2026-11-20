@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '0.2.1'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.0.0'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   const TRANSPARENT_RGB = [226, 236, 246];
 

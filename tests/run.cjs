@@ -404,16 +404,18 @@ test('Ctrl+Z works while the palette dropdown has focus', async (p) => {
   const server = await serve();
   const base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch();
-  let failed = 0, ran = 0;
+  let failed = 0, ran = 0; const failures = [];
   for (const t of tests) {
     if (filter && !t.name.includes(filter)) continue;
     ran++;
     const page = await open(browser, base, t.opts || {});
     try { await t.fn(page); console.log('  ✓ ' + t.name); }
-    catch (e) { failed++; console.log('  ✗ ' + t.name + '\n      ' + e.message.split('\n')[0]); }
+    catch (e) { failed++; failures.push(t.name); console.log('  ✗ ' + t.name + '\n      ' + e.message.split('\n')[0]); }
     finally { await page.ctx.close(); }
   }
   await browser.close(); server.close();
+  // Failed test names last, so they survive a truncated log (e.g. `| tail`).
+  if (failures.length) console.log('\nFailed:\n' + failures.map((n) => '  - ' + n).join('\n'));
   console.log(`\n${ran - failed}/${ran} passed`);
   process.exit(failed ? 1 : 0);
 })();
