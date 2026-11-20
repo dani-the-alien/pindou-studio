@@ -450,6 +450,62 @@ test('reloading the editing tab keeps editing there, not in a background tab', a
   eq(await tabState(p), { editing: true, notice: false }, 'reloaded tab');
   eq(await tabState(t2), { editing: false, notice: true }, 'background tab');
 });
+test('closing the editing tab while a dialog is open keeps a change made just before it', async (p) => {
+  const t2 = await secondTab(p);
+  await stroke(p, 12);
+  p.on('dialog', () => {}); // leave the prompt() open
+  await p.evaluate(() => { const s = document.querySelector('#traySize'); s.value = 'custom'; setTimeout(() => s.dispatchEvent(new Event('change')), 0); }); // opens prompt() at once
+  await p.waitForTimeout(150);
+  await t2.click('#tabTake');
+  await t2.waitForTimeout(3500); // the waiting tab says the other isn't answering; the user closes it
+  await p.close({ runBeforeUnload: true }).catch(() => {});
+  await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open, null, { timeout: 8000 });
+  eq(await beads(t2), 12, 'stroke made just before the dialog');
+});
+test('if the tab that asked closes first, another visible waiting tab carries on', async (p) => {
+  const b = await secondTab(p), c = await secondTab(p);
+  await stroke(p, 9);
+  await hide(p); // the editor is in the background
+  await b.click('#tabTake');
+  await b.close();
+  await c.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open, null, { timeout: 6000 });
+  eq(await beads(c), 9, 'the waiting tab has the work');
+});
+test('a drag in progress when editing moves is not applied', async (p) => {
+  const t2 = await secondTab(p);
+  await p.mouse.move(...await cellPoint(p, 2, 2)); await p.mouse.down();
+  await p.mouse.move(...await cellPoint(p, 10, 2), { steps: 3 });
+  await t2.click('#tabTake'); await t2.waitForFunction(() => __pindou.tab.editing);
+  await p.mouse.move(...await cellPoint(p, 30, 2), { steps: 3 }).catch(() => {});
+  await p.mouse.up().catch(() => {});
+  eq([await beads(p), await undoLen(p)], [0, 0], 'paused tab after the drag');
+  eq(await beads(t2), 0, 'nothing from the cancelled drag reached the new editor');
+});
+test('taking over ranks saved copies by generation, not by where they came from', async (p) => {
+  const t2 = await secondTab(p);
+  await stroke(p, 4); await p.waitForTimeout(600);
+  // storage holds a copy from a newer editor than the one being handed over (stale message)
+  await p.evaluate(() => {
+    const a = JSON.parse(localStorage.getItem('pindou.autosave'));
+    const newer = { ...a, gen: a.gen + 5, cells: a.cells.map(() => 0), legend: [a.legend[0] || 'H7'] };
+    localStorage.setItem('pindou.autosave', JSON.stringify(newer));
+  });
+  // and the editing tab's own copy is older: hand over without letting it save
+  await p.evaluate(() => { Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); }; });
+  await t2.click('#tabTake');
+  await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  eq(await beads(t2), 52 * 52, 'the newer-generation copy won');
+});
+test('asking, then going back to the editing tab, cancels the request', async (p) => {
+  const t2 = await secondTab(p);
+  await p.evaluate(() => { setTimeout(() => { const t = performance.now(); while (performance.now() - t < 1200); }, 0); }); // the editor is busy…
+  await p.waitForTimeout(50).catch(() => {});
+  await t2.click('#tabTake');
+  await hide(t2); // …and the user goes back to it before it answers
+  await p.waitForTimeout(1800);
+  eq([await p.evaluate(() => __pindou.tab.editing), await t2.evaluate(() => __pindou.tab.editing)], [true, false], 'still editing in the first tab');
+  eq(await tabState(p), { editing: true, notice: false }, 'no notice in the first tab');
+});
 test('losing the tab closes an open dialog without applying it', async (p) => {
   const t2 = await secondTab(p);
   await p.click('[data-action=import-image]');

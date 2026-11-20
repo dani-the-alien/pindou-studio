@@ -169,6 +169,7 @@
       if (used[i]) { lost.push(c.code); lostBeads += used[i]; }
     });
     const name = PALETTES[id].name;
+    if (lost.length) saveBeforeDialog();
     if (lost.length && !confirm(`${name} doesn't have ${lost.length} of the colors in this design (${lost.slice(0, 12).join(', ')}${lost.length > 12 ? ', …' : ''}).\n\nSwitching replaces those ${fmt(lostBeads)} beads with the closest ${name} colors. You can undo it afterwards.`)) {
       $('#paletteSelect').value = S.paletteId;
       return;
@@ -860,6 +861,9 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flushAutosave, 300);
   }
+  // A blocking dialog (confirm, prompt, print) can end with the tab being closed
+  // without the usual pagehide save, so save first.
+  function saveBeforeDialog() { if (tab.state === 'editing') saveNow(); }
   function flushAutosave() {
     clearTimeout(saveTimer);
     if (!dirty || !tab.editing) return;
@@ -875,8 +879,9 @@
   // tab asks; the editing tab stops, saves, sends its design over the BroadcastChannel
   // and lets go. If the editing tab can't answer (a dialog is open in it, or it's
   // frozen), the paused tab waits and says so; it takes over as soon as the other
-  // tab answers or is closed. So the editing tab always saves before editing moves,
-  // and there is nothing to race.
+  // tab answers or is closed. So a live editing tab always saves before editing
+  // moves; what a crash or a killed tab hadn't saved yet (at most the last moment,
+  // and nothing from before a dialog opened) can't be recovered.
   //
   // Each editor gets a new generation number, stored next to the autosave; when
   // taking over, copies (from storage or by message) are ranked by generation. While
@@ -892,6 +897,7 @@
     chan: null, token: 0, current: 0, release: null, waiting: null,
     slowTimer: null, payload: null, payloadTimer: null, payloadWaiter: null,
     gen: 0, blocked: false, everEdited: false, waitedAtStart: false, ready: null, lastSync: null, saveFailed: false,
+    cancelled: new Set(), asideTimer: null,
   };
   const genOf = (a) => (a && Number.isInteger(a.gen) ? a.gen : 0);
   // The newer of two saved copies: higher generation wins; on a tie the copy that was
@@ -918,6 +924,12 @@
     lockRequest({ signal: tab.waiting.signal });
   }
   function stopWaiting() { if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; } }
+  // Step out of the queue for a while (or until the next editor shows up).
+  function stepAside(ms) {
+    stopWaiting();
+    clearTimeout(tab.asideTimer);
+    tab.asideTimer = setTimeout(() => { if (tab.state === 'paused') waitForLock(); }, ms || 2000);
+  }
   function post(msg) { if (tab.chan) tab.chan.postMessage({ ...msg, from: tab.id }); }
   function saveNow() {
     if (tab.state !== 'editing' && tab.state !== 'off') return null;
@@ -974,6 +986,7 @@
     const project = saveNow();
     post({ type: 'handover', to: m.from, project });
     tab.current = 0; tab.state = 'paused'; tab.editing = false;
+    if (tab.saveFailed) { tab.saveFailed = false; hideToast(); }
     const release = tab.release; tab.release = null; release();
     showTabNotice();
     waitForLock();
@@ -991,8 +1004,9 @@
     tab.state = 'taking';
     $('#tabTake').setAttribute('aria-disabled', 'true');
     $('#tabTakeLabel').textContent = 'Taking over…';
-    post({ type: 'request' });
+    clearTimeout(tab.asideTimer);
     if (!tab.waiting) { tab.waiting = new AbortController(); lockRequest({ signal: tab.waiting.signal }); }
+    post({ type: 'request' });
     armSlowTimer();
   }
   // The editing tab hasn't answered: say why this tab is still waiting.
@@ -1000,7 +1014,7 @@
     clearTimeout(tab.slowTimer);
     tab.slowTimer = setTimeout(() => {
       if (tab.state !== 'taking') return;
-      $('#tabText').textContent = "The other tab isn't answering. It may have a dialog open (such as Print), or it may be busy. Switch to it, or close it, and this tab takes over with everything from there.";
+      $('#tabText').textContent = "The other tab isn't answering. It may have a dialog open (such as Print), or it may be busy or asleep in the background. Switch to it and close the dialog, or close that tab, and this one takes over with what was saved there.";
       $('#tabTakeLabel').textContent = 'Waiting for the other tab…';
     }, SLOW_ANSWER);
   }
@@ -1011,14 +1025,23 @@
       if (tab.state === 'editing') return;
       tab.payload = newest(tab.payload, m.project);
       if (tab.payloadWaiter) tab.payloadWaiter();
+      // After a hand-over, waiting tabs line up again (if the tab that asked has gone,
+      // one of them carries on). When the editor closes, they wait a moment first, so
+      // a reload of the editing tab gets editing back.
+      if (tab.state === 'paused') { if (m.type === 'handover') waitForLock(); else stepAside(1500); }
     } else if (m.type === 'request') {
-      if (tab.state === 'editing') handOver(m);
-      else if (tab.state === 'paused') stopWaiting(); // let the tab that asked be next
+      // Let a "cancel" that's already queued behind this request win (the asker went
+      // back to the editing tab, e.g. after it had been frozen in the background).
+      if (tab.state === 'editing') { tab.cancelled.delete(m.from); setTimeout(() => { if (!tab.cancelled.has(m.from)) handOver(m); }, 0); }
+      else if (tab.state === 'paused') stepAside(); // let the tab that asked be next
+    } else if (m.type === 'cancel') {
+      tab.cancelled.add(m.from);
+      if (tab.state === 'paused') waitForLock();
     } else if (m.type === 'editing') {
       // A new editor: older copies are out of date; paused tabs line up again, and a
       // tab that was asking asks the new editor instead.
       if (tab.state === 'paused' || tab.state === 'taking') tab.payload = null;
-      if (tab.state === 'paused') waitForLock();
+      if (tab.state === 'paused') { clearTimeout(tab.asideTimer); waitForLock(); }
       if (tab.state === 'taking') { post({ type: 'request' }); armSlowTimer(); }
     }
   }
@@ -1062,6 +1085,14 @@
     d.addEventListener('close', () => { if (tab.blocked) setTimeout(() => { if (tab.blocked && !d.open) showDialog(d); }, 0); });
     $('#tabTake').addEventListener('click', () => { if ($('#tabTake').getAttribute('aria-disabled') !== 'true') requestTakeover(); });
     document.addEventListener('visibilitychange', () => {
+      if (tab.state === 'taking' && document.visibilityState === 'hidden') {
+        // Asked, then left (perhaps to the editing tab itself): never mind.
+        stopWaiting(); clearTimeout(tab.slowTimer);
+        tab.state = 'paused';
+        post({ type: 'cancel' });
+        showTabNotice();
+        return;
+      }
       const waits = tab.state === 'paused' || (tab.state === 'starting' && tab.waitedAtStart);
       if (!waits) return;
       if (document.visibilityState === 'visible') waitForLock(); else stopWaiting();
@@ -1198,6 +1229,7 @@
 
   function printTrays() {
     buildPrintSheets();
+    saveBeforeDialog();
     window.print();
   }
   // Sheets are canvases (drawn synchronously), so they are ready even when the
@@ -1650,6 +1682,7 @@
 
     $('#traySize').addEventListener('change', (e) => {
       if (e.target.value === 'custom') {
+        saveBeforeDialog();
         const v = parseInt(prompt('Pegs per side for one tray (5–300):', String(S.tray)), 10);
         if (v >= 5 && v <= 300 && tab.editing) setTraySize(v); else e.target.value = String(S.tray);
       } else if (tab.editing) setTraySize(+e.target.value);
@@ -1845,7 +1878,7 @@
 
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
-    window.addEventListener('beforeprint', () => { if (!$('#printRoot').children.length) buildPrintSheets(); });
+    window.addEventListener('beforeprint', () => { saveBeforeDialog(); if (!$('#printRoot').children.length) buildPrintSheets(); });
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
     // Write the autosave right away when the tab is hidden or closed, not 0.4 s later.
     window.addEventListener('pagehide', flushAutosave);
