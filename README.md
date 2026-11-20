@@ -6,10 +6,13 @@ A browser-based design and layout tool for MARD 2.6mm fuse beads (拼豆). Plain
 python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
+To install it as a desktop app (app-menu entry plus a small user-level local server; built for Bazzite/KDE Plasma, works on most systemd Linux desktops), run `bash desktop/install.sh`. `AGENTS.md` has step-by-step instructions written for an AI assistant doing the setup.
+
 ## Features
 
 - **Draw by hand**: pencil, eraser (or right-click), flood fill, eyedropper, swap-all-of-a-color, undo/redo.
-- **Image → pattern**: CIEDE2000 color matching against the MARD palette. Optional limits: max colors (merges whichever color is cheapest to lose, so small details like eyes survive), only beads you own, Floyd–Steinberg dithering, and background removal.
+- **Palette views**: color families, hue (rainbow), value (light → dark), saturation, or MARD series order. Sorting uses OKLCH, so hues line up with color names.
+- **Image → pattern**: a tray-grid picker sets the size (click 2 × 3 to fit the image into that many trays). Matching uses CIEDE2000 color matching against the MARD palette. Optional limits: max colors (merges whichever color is cheapest to lose, so small details like eyes survive), only beads you own, Floyd–Steinberg dithering, and background removal.
 - **Multi-tray layout**: any design size up to 624×624. Tray boundaries are drawn on the canvas. Tray presets are 52/72/78/104 pegs per side, plus custom sizes. Focus mode works one board at a time, with per-board peg numbering and per-board counts.
 - **Bead counts**: per color for the whole design or a single tray. The CSV export has per-tray columns.
 - **Export**: PNG pattern with codes and legend, CSV, and print sheets (an overview plus one page per tray).

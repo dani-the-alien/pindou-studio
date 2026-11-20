@@ -41,7 +41,7 @@
     focus: null, // {r, c}
     owned: new Set(),
     editOwned: false,
-    filter: 'all', search: '', sort: 'count',
+    filter: 'all', search: '', sort: 'count', pview: 'family',
     undo: [], redo: [],
     stroke: null,
     hover: null,
@@ -51,14 +51,60 @@
   function buildPalette(id) {
     return PALETTES[id].colors.map((c, i) => {
       const rgb = Color.hexToRgb(c.hex);
-      return {
+      const col = {
         i, code: c.code, hex: c.hex, rgb,
         lab: Color.rgbToLab(rgb[0], rgb[1], rgb[2]),
+        ok: Color.rgbToOklch(rgb[0], rgb[1], rgb[2]),
         text: c.transparent ? '#333' : Color.contrastText(c.hex),
         transparent: !!c.transparent,
-        group: c.code.match(/^[A-Z]+/)[0],
+        series: c.code.match(/^[A-Z]+/)[0],
       };
+      col.family = colorFamily(col);
+      return col;
     });
+  }
+
+  // ---------- palette views (sorting / grouping) ----------
+  // Family boundaries were tuned by eye against the MARD 291 set; colors right
+  // on an edge (peach vs pink, olive vs yellow) are judgment calls either way.
+  const FAMILIES = ['Whites, grays & blacks', 'Browns & tans', 'Reds', 'Oranges & peaches', 'Yellows', 'Greens', 'Teals & aquas', 'Blues', 'Purples', 'Pinks & magentas', 'Clear'];
+  function colorFamily(c) {
+    if (c.transparent) return 'Clear';
+    const { L, C, H } = c.ok;
+    if (C < 0.036 || (C < 0.045 && (L > 0.93 || L < 0.3))) return FAMILIES[0];
+    if (H >= 20 && H < 95 && C < 0.135 && L < 0.52) return FAMILIES[1];
+    if (H >= 58 && H < 108 && C < 0.08 && L < 0.88) return FAMILIES[1];
+    if (H >= 20 && H < 58 && C < 0.05 && L < 0.82) return FAMILIES[1];
+    if (H >= 330 || H < 12) return FAMILIES[9];
+    if (H < 30) return L > 0.77 ? FAMILIES[9] : FAMILIES[2];
+    if (H < 45) return L > 0.8 ? FAMILIES[3] : FAMILIES[2];
+    if (H < 80) return FAMILIES[3];
+    if (H < 120) return L < 0.65 ? FAMILIES[5] : FAMILIES[4];
+    if (H < 170) return FAMILIES[5];
+    if (H < 215) return FAMILIES[6];
+    if (H < 285) return FAMILIES[7];
+    return FAMILIES[8];
+  }
+  const hueKey = (c) => (c.ok.H - 12 + 360) % 360; // start the wheel at red rather than pink
+  const isNeutral = (c) => c.family === FAMILIES[0] || c.transparent;
+  const PALETTE_VIEWS = {
+    series: { label: 'Series (code)', group: (c) => c.series, sort: (a, b) => a.i - b.i },
+    family: {
+      label: 'Color families', group: (c) => c.family,
+      sort: (a, b) => FAMILIES.indexOf(a.family) - FAMILIES.indexOf(b.family) || b.ok.L - a.ok.L,
+    },
+    hue: {
+      label: 'Hue (rainbow)', group: (c) => (isNeutral(c) ? 'Neutrals' : 'Colors'),
+      // 15° hue bands, light → dark inside each band: the rainbow still flows,
+      // without a pure hue sort's pale/dark/pale zig-zag.
+      sort: (a, b) => isNeutral(a) - isNeutral(b)
+        || (isNeutral(a) ? b.ok.L - a.ok.L : Math.floor(hueKey(a) / 15) - Math.floor(hueKey(b) / 15) || b.ok.L - a.ok.L),
+    },
+    value: { label: 'Value (light → dark)', group: () => null, sort: (a, b) => b.ok.L - a.ok.L },
+    chroma: { label: 'Saturation (vivid → muted)', group: () => null, sort: (a, b) => b.ok.C - a.ok.C || b.ok.L - a.ok.L },
+  };
+  function sortedPalette(view) {
+    return S.palette.slice().sort(PALETTE_VIEWS[view].sort);
   }
   function setPalette(id, remapCells) {
     const old = S.palette;
@@ -514,7 +560,9 @@
   function usedList(counts, sort) {
     const list = [];
     counts.forEach((n, i) => { if (n) list.push({ c: S.palette[i], n }); });
-    if (sort === 'code') list.sort((a, b) => a.c.i - b.c.i); else list.sort((a, b) => b.n - a.n || a.c.i - b.c.i);
+    if (sort === 'code') list.sort((a, b) => a.c.i - b.c.i);
+    else if (sort === 'color') list.sort((a, b) => PALETTE_VIEWS.family.sort(a.c, b.c));
+    else list.sort((a, b) => b.n - a.n || a.c.i - b.c.i);
     return list;
   }
 
@@ -546,16 +594,17 @@
     const used = countRegion();
     const q = S.search.trim().toUpperCase();
     box.innerHTML = '';
-    let group = null;
+    let group;
+    const view = PALETTE_VIEWS[S.pview];
     const frag = document.createDocumentFragment();
-    for (const c of S.palette) {
+    for (const c of sortedPalette(S.pview)) {
       if (q && !c.code.includes(q) && !c.hex.includes(q)) continue;
       if (S.filter === 'owned' && !S.owned.has(c.code)) continue;
       if (S.filter === 'used' && !counts[c.i]) continue;
-      if (c.group !== group) {
-        group = c.group;
-        const g = document.createElement('div'); g.className = 'group-label'; g.textContent = group;
-        frag.appendChild(g);
+      const cg = view.group(c);
+      if (cg !== group) {
+        group = cg;
+        if (cg) { const g = document.createElement('div'); g.className = 'group-label'; g.textContent = cg; frag.appendChild(g); }
       }
       const b = document.createElement('button');
       b.className = 'sw' + (c.transparent ? ' clear' : '') + (S.owned.has(c.code) ? '' : ' unowned');
@@ -812,15 +861,82 @@
 
   function openImageDialog() {
     const dlg = $('#imageDialog');
-    const q = $('#imgQuick'); q.innerHTML = '';
-    [1, 2, 3, 4].forEach((k) => {
-      const b = document.createElement('button'); b.type = 'button';
-      b.textContent = `${k} tray${k > 1 ? 's' : ''} wide (${k * S.tray})`;
-      b.addEventListener('click', () => { $('#imgW').value = k * S.tray; syncImgDims('w'); scheduleConvert(); });
-      q.appendChild(b);
-    });
     $('#imgOwned').disabled = S.owned.size === 0;
+    tp.sel = null; tp.hover = null;
     dlg.showModal();
+    drawTrayPicker();
+  }
+
+  // ----- tray picker: a "table size" style grid of trays for choosing W × H -----
+  const tp = { hover: null, sel: null, n: 4, px: 220 };
+  const imgDims = () => ({ w: clamp(+$('#imgW').value | 0, 1, MAX_DIM), h: clamp(+$('#imgH').value | 0, 1, MAX_DIM) });
+  function drawTrayPicker() {
+    const cv = $('#trayPicker');
+    const { w, h } = imgDims();
+    const usedA = Math.ceil(w / S.tray), usedD = Math.ceil(h / S.tray);
+    const target = tp.hover || tp.sel;
+    const maxTrays = Math.floor(MAX_DIM / S.tray);
+    // Only resize the grid when the pointer isn't on it, so squares never shift under the cursor.
+    // It grows one step past the current size (or keyboard selection) to leave room to go bigger.
+    if (!tp.hover) tp.n = clamp(Math.max(usedA, usedD, tp.sel ? Math.max(tp.sel.a, tp.sel.d) : 0) + 1, 4, Math.max(4, maxTrays));
+    const r = window.devicePixelRatio || 1;
+    cv.width = tp.px * r; cv.height = tp.px * r;
+    const g = cv.getContext('2d');
+    g.setTransform(r, 0, 0, r, 0, 0);
+    const cs = tp.px / tp.n;
+    g.fillStyle = T.panel; g.fillRect(0, 0, tp.px, tp.px);
+    // empty trays
+    for (let y = 0; y < tp.n; y++) for (let x = 0; x < tp.n; x++) {
+      g.fillStyle = T.empty;
+      g.fillRect(x * cs + 1.5, y * cs + 1.5, cs - 3, cs - 3);
+    }
+    // current image footprint, drawn to scale in tray units
+    const fw = (w / S.tray) * cs, fh = (h / S.tray) * cs;
+    if (imgState.img) {
+      g.globalAlpha = 0.85; g.imageSmoothingEnabled = true;
+      g.drawImage(imgState.img, 1.5, 1.5, Math.max(1, fw - 3), Math.max(1, fh - 3));
+      g.globalAlpha = 1;
+    } else {
+      g.fillStyle = T.grid; g.fillRect(1.5, 1.5, fw - 3, fh - 3);
+    }
+    g.strokeStyle = T.tray; g.lineWidth = 2; g.strokeRect(1.5, 1.5, fw - 3, fh - 3);
+    // hovered / keyboard-selected tray block
+    if (target) {
+      g.fillStyle = T.accent; g.globalAlpha = 0.18;
+      g.fillRect(0, 0, target.a * cs, target.d * cs);
+      g.globalAlpha = 1;
+      g.strokeStyle = T.accent; g.lineWidth = 2.5;
+      g.strokeRect(1.25, 1.25, target.a * cs - 2.5, target.d * cs - 2.5);
+    }
+    // tray seams
+    g.strokeStyle = T.line; g.lineWidth = 1;
+    for (let k = 1; k < tp.n; k++) {
+      g.beginPath(); g.moveTo(k * cs, 0); g.lineTo(k * cs, tp.px); g.moveTo(0, k * cs); g.lineTo(tp.px, k * cs); g.stroke();
+    }
+    $('#tpLabel').textContent = target
+      ? `${target.a} × ${target.d} tray${target.a * target.d > 1 ? 's' : ''} → ${fitToTrays(target.a, target.d).join(' × ')} beads`
+      : `${w} × ${h} beads · ${usedA} × ${usedD} tray${usedA * usedD > 1 ? 's' : ''}`;
+    cv.setAttribute('aria-valuetext', $('#tpLabel').textContent);
+  }
+  function fitToTrays(a, d) {
+    const A = Math.min(a * S.tray, MAX_DIM), D = Math.min(d * S.tray, MAX_DIM);
+    if (!$('#imgLock').checked || !imgState.img) return [A, D];
+    let w = Math.min(A, Math.round(D * imgState.aspect));
+    let h = Math.round(w / imgState.aspect);
+    if (h > D) { h = D; w = Math.round(h * imgState.aspect); }
+    return [Math.max(1, w), Math.max(1, h)];
+  }
+  function applyTrayFit(a, d) {
+    const [w, h] = fitToTrays(a, d);
+    $('#imgW').value = w; $('#imgH').value = h;
+    tp.sel = null;
+    drawTrayPicker();
+    scheduleConvert();
+  }
+  function tpCell(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const cs = r.width / tp.n;
+    return { a: clamp(Math.floor((e.clientX - r.left) / cs) + 1, 1, tp.n), d: clamp(Math.floor((e.clientY - r.top) / cs) + 1, 1, tp.n) };
   }
   function syncImgDims(from) {
     if (!$('#imgLock').checked || !imgState.img) return;
@@ -829,6 +945,7 @@
   }
   function scheduleConvert() {
     clearTimeout(imgState.timer);
+    drawTrayPicker();
     $('#imgStats').textContent = 'Converting…';
     imgState.timer = setTimeout(runConvert, 150);
   }
@@ -1051,6 +1168,12 @@
       rebuildPixmap(); selectColor(S.color); changed(); refreshPanels();
       toast(`Switched to ${PALETTES[ps.value].name}`);
     });
+    const pv = $('#paletteView');
+    for (const [id, v] of Object.entries(PALETTE_VIEWS)) {
+      const o = document.createElement('option'); o.value = id; o.textContent = v.label; pv.appendChild(o);
+    }
+    pv.value = S.pview;
+    pv.addEventListener('change', () => { S.pview = pv.value; savePrefs(); renderSwatches(); });
     $('#paletteSearch').addEventListener('input', (e) => { S.search = e.target.value; renderSwatches(); });
     $$('#paletteFilter button').forEach((b) => b.addEventListener('click', () => {
       S.filter = b.dataset.filter;
@@ -1130,6 +1253,25 @@
     $('#imgH').addEventListener('input', () => { syncImgDims('h'); scheduleConvert(); });
     ['#imgMax', '#imgOwned', '#imgDither', '#imgBg', '#imgClear', '#imgLock'].forEach((s) => $(s).addEventListener('change', scheduleConvert));
     $('#imgMax').addEventListener('input', scheduleConvert);
+    const tpc = $('#trayPicker');
+    tpc.addEventListener('pointermove', (e) => { tp.hover = tpCell(e); drawTrayPicker(); });
+    tpc.addEventListener('pointerleave', () => { tp.hover = null; drawTrayPicker(); });
+    tpc.addEventListener('pointerdown', (e) => { e.preventDefault(); const c = tpCell(e); tp.hover = null; applyTrayFit(c.a, c.d); });
+    tpc.addEventListener('blur', () => { tp.sel = null; drawTrayPicker(); });
+    tpc.addEventListener('keydown', (e) => {
+      const { w, h } = imgDims();
+      const cur = tp.sel || { a: Math.ceil(w / S.tray), d: Math.ceil(h / S.tray) };
+      const moves = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
+      if (moves[e.key]) {
+        e.preventDefault();
+        const maxT = Math.floor(MAX_DIM / S.tray);
+        tp.sel = { a: clamp(cur.a + moves[e.key][0], 1, maxT), d: clamp(cur.d + moves[e.key][1], 1, maxT) };
+        drawTrayPicker();
+      } else if ((e.key === 'Enter' || e.key === ' ') && tp.sel) {
+        e.preventDefault();
+        applyTrayFit(tp.sel.a, tp.sel.d);
+      }
+    });
     idlg.addEventListener('close', () => {
       if (idlg.returnValue !== 'ok' || !imgState.result) return;
       S.focus = null;
@@ -1161,7 +1303,7 @@
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
   }
 
-  function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round }); }
+  function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview }); }
 
   // ---------- boot ----------
   function boot() {
@@ -1170,6 +1312,7 @@
     if (prefs.guides != null) S.guides = prefs.guides;
     if (prefs.showCodes != null) S.showCodes = prefs.showCodes;
     if (prefs.round != null) S.round = prefs.round;
+    if (prefs.pview && PALETTE_VIEWS[prefs.pview]) S.pview = prefs.pview;
     $('#guides').value = String(S.guides); $('#showCodes').checked = S.showCodes; $('#roundBeads').checked = S.round;
 
     setPalette(S.paletteId, false);

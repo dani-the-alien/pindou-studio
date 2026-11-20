@@ -65,5 +65,20 @@
     return L > 0.36 ? '#111' : '#fff';
   }
 
-  window.Color = { hexToRgb, rgbToLab, deltaE2000, contrastText };
+  // OKLCH (Björn Ottosson's OKLab in polar form). Used for sorting/grouping the
+  // palette, because its hue angles line up with color names far better than
+  // CIELAB's do. L is 0..1, C is roughly 0..0.37, H is degrees.
+  function rgbToOklch(r, g, b) {
+    const R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b);
+    const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+    const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+    const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+    const L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    const Bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    let H = Math.atan2(Bb, A) * deg; if (H < 0) H += 360;
+    return { L, C: Math.hypot(A, Bb), H };
+  }
+
+  window.Color = { hexToRgb, rgbToLab, rgbToOklch, deltaE2000, contrastText };
 })();

@@ -98,6 +98,11 @@
           <input id="paletteSearch" type="search" placeholder="Find code (e.g. A1, H7)" aria-label="Find color code">
         </div>
         <div class="row">
+          <label class="inline">View
+            <select id="paletteView" aria-label="Palette view"></select>
+          </label>
+        </div>
+        <div class="row">
           <div class="seg" id="paletteFilter">
             <button data-filter="all" aria-pressed="true">All</button>
             <button data-filter="owned" aria-pressed="false">My beads</button>
@@ -121,6 +126,7 @@
           <span class="grow"></span>
           <div class="seg" id="countSort">
             <button data-sort="count" aria-pressed="true">By count</button>
+            <button data-sort="color" aria-pressed="false">By color</button>
             <button data-sort="code" aria-pressed="false">By code</button>
           </div>
         </div>
@@ -176,7 +182,11 @@
             <label>Height <input id="imgH" type="number" min="4" max="624" value="52"></label>
           </div>
           <label class="check"><input type="checkbox" id="imgLock" checked> Keep aspect ratio</label>
-          <div class="quick" id="imgQuick"></div>
+          <div class="tray-picker">
+            <div class="tp-head"><span>Fit to trays</span><span id="tpLabel" class="muted"></span></div>
+            <canvas id="trayPicker" tabindex="0" role="slider" aria-label="Trays across and down. Arrow keys change the selection, Enter applies it."></canvas>
+            <p class="hint">Click a square to fit the image into that many trays across × down. The shaded image shows the current size.</p>
+          </div>
           <label>Max colors <input id="imgMax" type="number" min="0" max="291" value="0" title="0 = no limit"></label>
           <label class="check"><input type="checkbox" id="imgOwned"> Only use my collection</label>
           <label class="check"><input type="checkbox" id="imgDither"> Dithering (smoother gradients, noisier to build)</label>
