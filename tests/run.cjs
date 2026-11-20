@@ -392,6 +392,22 @@ test('a long conversion shows a progress card; a quick one does not', async (p) 
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled && !document.querySelector('#imgStats').textContent.startsWith('Converting'), null, { timeout: 90000 });
   eq(await p.evaluate(() => [document.querySelector('#imgBusy').hidden, document.querySelector('#imgPreviewBox').hasAttribute('aria-busy')]), [true, false], 'card gone when done');
 });
+test('the app links to its repository in a new tab', async (p) => {
+  const a = await p.evaluate(() => { const l = document.querySelector('a.repo-link'); return l && [l.href, l.target, l.rel, l.getAttribute('aria-label')]; });
+  assert(a, 'no repository link');
+  eq(a.slice(0, 3), ['https://github.com/dani-the-alien/pindou-studio', '_blank', 'noopener'], 'link');
+  assert(/new tab/.test(a[3]), 'spoken name does not say it opens a new tab');
+});
+test('exported PNG and printed sheets carry the app address', async (p) => {
+  await p.evaluate(() => { window.__texts = []; const f = CanvasRenderingContext2D.prototype.fillText; CanvasRenderingContext2D.prototype.fillText = function (t, ...a) { window.__texts.push(String(t)); return f.call(this, t, ...a); }; });
+  await p.click('[data-action=toggle-export]');
+  const dl = p.waitForEvent('download');
+  await p.click('[data-action=export-png]'); await dl;
+  assert(await p.evaluate(() => window.__texts.some((t) => t.includes('dani-the-alien.github.io/pindou-studio'))), 'PNG has no address');
+  await p.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  const sheets = await p.evaluate(() => [...document.querySelectorAll('#printRoot .sheet')].map((s) => s.textContent.includes('dani-the-alien.github.io/pindou-studio')));
+  assert(sheets.length && sheets.every(Boolean), 'a printed sheet has no address');
+});
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);

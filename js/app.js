@@ -54,6 +54,8 @@
 
   const VERSION = '1.0.0'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
+  // Printed on exports and sheets so people who see a pattern can find the app.
+  const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
   const TRANSPARENT_RGB = [226, 236, 246];
 
   // ---------- state ----------
@@ -1041,7 +1043,8 @@
     const rows = Math.ceil(list.length / cols);
     const head = 56;
     const out = document.createElement('canvas');
-    out.width = Math.max(pattern.width, 480); out.height = head + pattern.height + 30 + rows * rowH + 20;
+    const foot = 28;
+    out.width = Math.max(pattern.width, 480); out.height = head + pattern.height + 30 + rows * rowH + 20 + foot;
     const g = out.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, out.width, out.height);
     g.fillStyle = '#111'; g.font = '700 20px system-ui, sans-serif'; g.textBaseline = 'top';
@@ -1058,6 +1061,8 @@
       g.strokeStyle = '#999'; g.strokeRect(x + 0.5, y + 0.5, 17, 17);
       g.fillStyle = '#111'; g.fillText(`${c.code}  × ${fmt(n)}`, x + 26, y + 9);
     });
+    g.font = '12px system-ui, sans-serif'; g.fillStyle = '#666'; g.textBaseline = 'bottom';
+    g.fillText(CREDIT, 12, out.height - 10);
     out.toBlob((b) => download(safeName(S.name) + '.png', b), 'image/png');
   }
 
@@ -1087,7 +1092,7 @@
     const legendHtml = (list) => list.map(({ c, n }) => `<div><span class="chip" style="background:${c.transparent ? 'rgb(226,236,246)' : c.hex}"></span><b>${c.code}</b> × ${fmt(n)}</div>`).join('');
     const addSheet = (title, sub, canvasEl, list) => {
       const sec = document.createElement('section'); sec.className = 'sheet';
-      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(title)}</h2><div class="sheet-sub">${escapeHtml(sub)}</div></div>`;
+      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(title)}</h2><div class="sheet-sub">${escapeHtml(sub)}</div><div class="sheet-credit">${escapeHtml(CREDIT)}</div></div>`;
       canvasEl.className = 'sheet-img';
       sec.appendChild(canvasEl);
       const lg = document.createElement('div'); lg.className = 'legend'; lg.innerHTML = legendHtml(list);
