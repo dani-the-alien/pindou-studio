@@ -1817,57 +1817,133 @@ test('short links: an open QR code stays open when the suggestion arrives', asyn
 });
 // ---------- 1.3: mouse wheel zooms, touchpad scroll pans ----------
 // Send a burst of wheel events (as one device would) and report what each did to the view.
+// Chromium's own WheelEvent fills in wheelDeltaY from deltaY, which no real browser does for
+// touchpads, so each event sets it explicitly (undefined = a browser without it).
 async function wheelBurst(p, events) {
   return p.evaluate((events) => {
     const v = document.querySelector('#viewport'), r = v.getBoundingClientRect(), out = [];
     for (const ev of events) {
       const before = { ...__pindou.S.view };
-      const e = new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, deltaMode: 0, deltaX: 0, ...ev });
-      if (ev.wheelDeltaY !== undefined) Object.defineProperty(e, 'wheelDeltaY', { value: ev.wheelDeltaY });
+      const { wheelDeltaY, ...init } = ev;
+      const e = new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, deltaMode: 0, deltaX: 0, ...init });
+      Object.defineProperty(e, 'wheelDeltaY', { value: wheelDeltaY });
       v.dispatchEvent(e);
       const after = __pindou.S.view;
-      out.push(after.scale !== before.scale ? 'zoom' : (after.ox !== before.ox || after.oy !== before.oy) ? 'pan' : 'none');
+      out.push(after.scale !== before.scale ? +(after.scale / before.scale).toFixed(3) : (after.ox !== before.ox || after.oy !== before.oy) ? 'pan' : 'none');
     }
     return out;
   }, events);
 }
 const gap = (p) => p.waitForTimeout(350); // longer than a burst's 250 ms
-test('wheel: mouse wheels zoom, in each browser\'s way of reporting them', async (p) => {
-  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }, { deltaY: 100, wheelDeltaY: -120 }]), ['zoom', 'zoom'], 'Chrome/Edge notch');
+const ZOOM_OUT = +(1 / 1.2).toFixed(3), ZOOM_IN = 1.2;
+test('wheel: mouse wheels zoom 1.2× a notch, in each browser\'s way of reporting them', async (p) => {
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }, { deltaY: 100, wheelDeltaY: -120 }]), [ZOOM_OUT, ZOOM_OUT], 'Chrome/Edge notch');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: -66.66666, wheelDeltaY: 120 }]), ['zoom'], 'Chrome notch at 150% page zoom');
+  eq(await wheelBurst(p, [{ deltaY: -66.66666, wheelDeltaY: 120 }]), [ZOOM_IN], 'Chrome notch at 150% page zoom');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 3, deltaMode: 1 }]), ['zoom'], 'Firefox notch (lines)');
+  eq(await wheelBurst(p, [{ deltaY: 4.000244, wheelDeltaY: -120 }]), [ZOOM_OUT], 'Chrome on macOS, a slow notch');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 53 }]), ['zoom'], 'a notch with no wheelDeltaY');
+  eq(await wheelBurst(p, [{ deltaY: 33.33, wheelDeltaY: -120 }]), [ZOOM_OUT], 'Windows set to scroll 1 line a notch');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 3, deltaMode: 1 }]), [ZOOM_OUT], 'Firefox notch (lines)');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 53 }]), [+(1 / Math.pow(1.2, 0.53)).toFixed(3)], 'a whole-pixel notch from a browser without wheelDeltaY');
 });
 test('wheel: a touchpad pans, even when a flick speeds up into big steps', async (p) => {
   eq(await wheelBurst(p, [{ deltaY: 1.5 }, { deltaY: 6 }, { deltaY: 18 }, { deltaY: 60 }, { deltaY: 120 }, { deltaY: 80 }]), ['pan', 'pan', 'pan', 'pan', 'pan', 'pan'], 'a flick');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 40, wheelDeltaY: -120 }]), ['pan'], 'Chrome touchpad signature (wheelDeltaY = -3 × deltaY)');
+  eq(await wheelBurst(p, [{ deltaY: 40, wheelDeltaY: -120 }]), ['pan'], 'macOS touchpad signature (wheelDeltaY = -3 × deltaY)');
   await gap(p);
   eq(await wheelBurst(p, [{ deltaX: 4, deltaY: 50 }]), ['pan'], 'any sideways movement');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 45.5 }, { deltaY: 70.25 }]), ['pan', 'pan'], 'a fast flick whose first step is big but fractional');
 });
 test('wheel: each burst is judged afresh; Ctrl zooms and Shift pans whatever the device', async (p) => {
   eq(await wheelBurst(p, [{ deltaY: 2 }]), ['pan'], 'touchpad');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }]), ['zoom'], 'then a mouse');
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }]), [ZOOM_OUT], 'then a mouse');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 2, ctrlKey: true }]), ['zoom'], 'touchpad pinch (Ctrl+wheel)');
+  assert(typeof (await wheelBurst(p, [{ deltaY: 2, ctrlKey: true }]))[0] === 'number', 'touchpad pinch (Ctrl+wheel) zooms');
   await gap(p);
-  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120, shiftKey: true }]), ['pan'], 'Shift+wheel');
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120, shiftKey: true }]), ['pan'], 'Shift+wheel (Firefox: deltaY)');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaX: 100, deltaY: 0, wheelDeltaY: 0, shiftKey: true }]), ['pan'], 'Shift+wheel (Chrome: turned into deltaX)');
+  // letting go of Shift mid-spin: the wheel zooms again at once (Shift didn't judge the burst)
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }]), [ZOOM_OUT], 'the wheel right after Shift');
 });
 test('wheel: a high-resolution wheel zooms in proportion, not a full step per event', async (p) => {
   const s = await p.evaluate(() => __pindou.S.view.scale);
-  await wheelBurst(p, [{ deltaY: -100, wheelDeltaY: 120 }]);
+  await wheelBurst(p, [{ deltaY: -3, deltaMode: 1 }]);
   const one = await p.evaluate(() => __pindou.S.view.scale) / s;
+  assert(one > 1.15, 'a whole notch zoomed only ' + one.toFixed(3) + '×');
   await gap(p);
   const s2 = await p.evaluate(() => __pindou.S.view.scale);
-  await wheelBurst(p, [{ deltaY: -50, wheelDeltaY: 120 }, { deltaY: -50, wheelDeltaY: 120 }]); // the same notch in two halves
+  await wheelBurst(p, [{ deltaY: -1.5, deltaMode: 1 }, { deltaY: -1.5, deltaMode: 1 }]); // the same notch in two halves
   const two = await p.evaluate(() => __pindou.S.view.scale) / s2;
   assert(Math.abs(one - two) < 0.01, `one notch ${one.toFixed(3)}× vs two halves ${two.toFixed(3)}×`);
 });
+test('wheel: deltaMode is read before the deltas (Firefox switches to pixels otherwise)', async (p) => {
+  const firsts = await p.evaluate(() => {
+    const v = document.querySelector('#viewport'), r = v.getBoundingClientRect(), firsts = [];
+    for (const extra of [{}, {}, { ctrlKey: true }, { shiftKey: true }]) {
+      const e = new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: r.left + 50, clientY: r.top + 50, deltaMode: 1, deltaY: 3, ...extra });
+      let first = null;
+      for (const k of ['deltaMode', 'deltaX', 'deltaY', 'deltaZ', 'wheelDeltaY']) {
+        const val = e[k];
+        Object.defineProperty(e, k, { get() { if (!first) first = k; return val; } });
+      }
+      v.dispatchEvent(e);
+      firsts.push(first);
+    }
+    return firsts;
+  });
+  eq(firsts, ['deltaMode', 'deltaMode', 'deltaMode', 'deltaMode'], 'first property read, per event');
+});
 
+test('keyboard: after New makes the design smaller, Enter paints inside it', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End'); // column 104
+  await newDesign(p); // 52×52; no click on the canvas
+  await p.focus('#viewport'); await keys(p, 'Enter');
+  eq(await cellV(p, 51, 0), await p.evaluate(() => __pindou.S.color), 'bead at the new right edge');
+  eq(await beads(p), 1, 'beads');
+  assert(/column 52, row 1/.test(await p.textContent('#canvasLive')), 'announced: ' + await p.textContent('#canvasLive'));
+});
+test('keyboard: Enter on the tray buttons over the canvas presses them, not the canvas', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.keyboard.press(']'); // first tray
+  await p.focus('#viewport'); await keys(p, 'ArrowRight');
+  await p.focus('[data-action=tray-next]'); await keys(p, 'Enter');
+  eq(await p.evaluate(() => __pindou.S.focus), { r: 0, c: 1 }, 'tray after Next tray');
+  eq(await beads(p), 0, 'beads');
+});
+test('keyboard: stepping to another tray brings the cursor into it', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.keyboard.press(']');
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'ArrowDown');
+  await keys(p, ']', 'Enter');
+  const tray = await p.evaluate(() => __pindou.S.tray);
+  eq(await cellV(p, tray, 1), await p.evaluate(() => __pindou.S.color), 'bead at the left edge of the second tray');
+});
+test('keyboard: Ctrl+Z of a resize while the canvas has focus keeps the cursor inside', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End'); // column 104
+  await keys(p, 'Control+z'); // back to 52 wide, the canvas still focused
+  eq(await p.evaluate(() => __pindou.S.w), 52, 'width after undo');
+  await keys(p, 'Enter');
+  eq(await cellV(p, 51, 0), await p.evaluate(() => __pindou.S.color), 'bead at the right edge');
+  eq(await beads(p), 1, 'beads');
+});
+test('keyboard: it says when picking or filling does nothing, and when a fill works with a full undo history', async (p) => {
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'i', 'Enter');
+  assert(/Nothing to pick here/.test(await p.textContent('#canvasLive')), 'empty pick: ' + await p.textContent('#canvasLive'));
+  await keys(p, 'p');
+  for (let k = 0; k < 205; k++) await keys(p, k % 2 ? 'Delete' : 'Enter'); // fill the undo history
+  await keys(p, 'Delete', 'f', 'Enter');
+  assert(/^Filled\./.test(await p.textContent('#canvasLive')), 'real fill: ' + await p.textContent('#canvasLive'));
+  await keys(p, 'Enter');
+  assert(/^Nothing changed\./.test(await p.textContent('#canvasLive')), 'fill with the same color: ' + await p.textContent('#canvasLive'));
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

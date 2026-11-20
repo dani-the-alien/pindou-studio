@@ -639,29 +639,45 @@
   // so a flick never turns into zooming halfway; a wheel notch starts with a big step.
   const WHEEL_GAP = 250;
   const wheelBurst = { until: -Infinity, mouse: false };
-  function looksLikeMouseWheel(e) {
-    if (e.deltaMode !== 0) return true;         // lines or pages: a wheel (Firefox reports wheels this way)
+  // Note: deltaMode must be read before deltaX/deltaY. Firefox turns an event's line deltas
+  // into pixels as soon as a page reads deltaX/Y first (dom.event.wheel-deltaMode-lines.disabled).
+  function looksLikeMouseWheel(e, mode) {
+    if (mode !== 0) return true;                // lines or pages: a wheel (Firefox reports wheels this way)
     if (e.deltaX !== 0) return false;           // any sideways movement: a touchpad
     const wd = e.wheelDeltaY;                   // non-standard, but Chrome, Safari and Firefox have it
     if (typeof wd === 'number' && wd !== 0) {
-      if (wd === -3 * e.deltaY) return false;   // Chrome's touchpad signature
-      if (wd % 120 === 0) return true;          // whole wheel notches
+      if (wd === -3 * e.deltaY) return false;   // Chrome and Safari's touchpad signature (macOS)
+      if (wd % 120 === 0) return true;          // whole wheel notches, at any page zoom or scroll setting
     }
-    return Math.abs(e.deltaY) >= 40;            // a big first step: a notch, at any browser zoom (e.g. 66.7 at 150%)
+    // no help from wheelDeltaY: a big, whole-pixel first step is a notch (touchpads report fractions)
+    return Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 40;
+  }
+  // How many notches an event is. Chrome's wheelDeltaY counts raw notches (120 each) whatever
+  // the page zoom, scroll setting or macOS acceleration; deltaY in pixels doesn't.
+  function wheelNotches(e, mode) {
+    if (mode === 1) return e.deltaY / 3;        // Firefox: 3 lines a notch
+    if (mode === 2) return e.deltaY;            // pages
+    const wd = e.wheelDeltaY;
+    if (typeof wd === 'number' && wd !== 0 && wd % 120 === 0) return -wd / 120;
+    return e.deltaY / 100;
   }
   viewport.addEventListener('wheel', (e) => {
+    const mode = e.deltaMode; // first, before any delta (see above)
     e.preventDefault();
     const p = localPt(e);
-    if (e.timeStamp > wheelBurst.until) wheelBurst.mouse = looksLikeMouseWheel(e);
-    wheelBurst.until = e.timeStamp + WHEEL_GAP;
+    // Only plain wheel events judge a burst: Shift turns a wheel into sideways scrolling, and
+    // Ctrl is a pinch; neither says which device it is.
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (e.timeStamp > wheelBurst.until) wheelBurst.mouse = looksLikeMouseWheel(e, mode);
+      wheelBurst.until = e.timeStamp + WHEEL_GAP;
+    }
     if (e.ctrlKey || e.metaKey) {
       // trackpad pinch (browsers report it as ctrl+wheel) or explicit ctrl+wheel
-      zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.01)), p.x, p.y);
+      zoomAt(Math.exp(-e.deltaY * (mode === 1 ? 0.05 : 0.01)), p.x, p.y);
     } else if (wheelBurst.mouse && !e.shiftKey) {
-      // mouse wheel: zoom like most pixel editors, 1.2× a notch (100 px or 3 lines);
-      // a high-resolution wheel's smaller steps zoom proportionally less
-      const notches = e.deltaMode === 1 ? e.deltaY / 3 : e.deltaMode === 2 ? e.deltaY : e.deltaY / 100;
-      zoomAt(Math.pow(1.2, -clamp(notches, -3, 3)), p.x, p.y);
+      // mouse wheel: zoom like most pixel editors, 1.2× a notch; a high-resolution wheel's
+      // part-notches zoom proportionally less
+      zoomAt(Math.pow(1.2, -clamp(wheelNotches(e, mode), -3, 3)), p.x, p.y);
     } else {
       // trackpad two-finger scroll / shift+wheel: pan
       S.view.ox -= e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX; // browsers report shift+wheel as deltaX or deltaY
@@ -703,6 +719,13 @@
   function cursorBounds() {
     return S.focus ? trayRect(S.focus.r, S.focus.c) : { x: 0, y: 0, w: S.w, h: S.h };
   }
+  // Keep the cursor inside the design (or the focused tray): the size or the tray can
+  // change under it (New, Open, Undo of a resize, [ and ]).
+  function clampCursor() {
+    if (!S.cursor) return;
+    const b = cursorBounds();
+    S.cursor = { x: clamp(S.cursor.x, b.x, b.x + b.w - 1), y: clamp(S.cursor.y, b.y, b.y + b.h - 1) };
+  }
   function placeCursor(x, y) {
     const b = cursorBounds();
     S.cursor = { x: clamp(x, b.x, b.x + b.w - 1), y: clamp(y, b.y, b.y + b.h - 1) };
@@ -717,6 +740,7 @@
     if (py < m) S.view.oy += m - py; else if (py + s > vh - m) S.view.oy -= py + s - (vh - m);
   }
   function announceCursor(done) {
+    clampCursor();
     const c = S.cursor; if (!c) return;
     const v = S.cells[c.y * S.w + c.x];
     const bead = v >= 0 ? S.palette[v].code : 'empty';
@@ -725,17 +749,20 @@
   }
   function applyAtCursor(erase) {
     if (!tab.editing || !S.cursor) return;
+    clampCursor();
     const cell = { x: S.cursor.x, y: S.cursor.y, i: S.cursor.y * S.w + S.cursor.x };
     if (S.focus && !inFocus(cell)) return;
     if (!erase && S.tool === 'pan') { $('#canvasLive').textContent = 'The pan tool is selected: press P for the pencil to draw.'; return; }
     if (!erase && S.tool === 'picker') {
       const v = S.cells[cell.i];
       if (v >= 0) { selectColor(v); setTool('pencil'); announceCursor(`Picked ${S.palette[v].code}.`); }
+      else announceCursor('Nothing to pick here.');
       return;
     }
     if (!erase && (S.tool === 'fill' || S.tool === 'replace')) {
+      const top = S.undo[S.undo.length - 1]; // (the length stays at the cap once the history is full)
       runTapTool({ tool: S.tool, cell });
-      announceCursor(S.tool === 'fill' ? 'Filled.' : 'Swapped.');
+      announceCursor(S.undo[S.undo.length - 1] === top ? 'Nothing changed.' : S.tool === 'fill' ? 'Filled.' : 'Swapped.');
       return;
     }
     const v = erase || S.tool === 'eraser' ? -1 : S.color;
@@ -743,7 +770,9 @@
     announceCursor(v < 0 ? 'Erased.' : 'Placed.');
   }
   function onCanvasKey(e) {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // only keys meant for the canvas itself, not for the tray buttons shown over it
+    if (e.target !== viewport || e.ctrlKey || e.metaKey || e.altKey) return;
+    clampCursor();
     const step = e.shiftKey ? 10 : 1;
     const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     const first = !cursorOn || !S.cursor;
@@ -1004,6 +1033,7 @@
     if (r == null) S.focus = null;
     else S.focus = { r, c };
     fitView();
+    if (S.cursor) { clampCursor(); if (cursorShown()) announceCursor(); }
     refreshPanels();
     if (fromPanel && sheetMode() && $('#sidebar').classList.contains('expanded')) {
       const hadFocus = $('#trayGrid').contains(document.activeElement);
