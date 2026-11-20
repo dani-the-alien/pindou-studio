@@ -236,14 +236,18 @@
 
   function resizeCanvas() {
     const r = viewport.getBoundingClientRect();
+    document.documentElement.style.setProperty('--below-canvas', Math.max(0, innerHeight - r.bottom) + 'px');
+    // Hidden (printing, a collapsed layout): keep the view as it is for when it's back.
+    if (!r.width || !r.height) return;
     dpr = window.devicePixelRatio || 1;
     // When the canvas changes size (rotating, folding or unfolding, opening the bottom
-    // sheet): a design that was fully in view is fitted again; otherwise the zoom stays
-    // and whatever was in the middle stays in the middle.
+    // sheet): a design (or focused tray) that was fully in view is fitted again;
+    // otherwise the zoom stays and whatever was in the middle stays in the middle.
     let refit = false;
     if (vw > 0 && vh > 0) {
-      const v = S.view, x0 = v.ox, y0 = v.oy, x1 = x0 + S.w * v.scale, y1 = y0 + S.h * v.scale;
-      refit = !S.focus && x0 >= -1 && y0 >= -1 && x1 <= vw + 1 && y1 <= vh + 1;
+      const v = S.view, t = S.focus ? trayRect(S.focus.r, S.focus.c) : { x: 0, y: 0, w: S.w, h: S.h };
+      const x0 = v.ox + t.x * v.scale, y0 = v.oy + t.y * v.scale, x1 = x0 + t.w * v.scale, y1 = y0 + t.h * v.scale;
+      refit = x0 >= -1 && y0 >= -1 && x1 <= vw + 1 && y1 <= vh + 1;
       S.view.ox += (r.width - vw) / 2; S.view.oy += (r.height - vh) / 2;
     }
     vw = r.width; vh = r.height;
@@ -521,6 +525,7 @@
   viewport.addEventListener('contextmenu', (e) => e.preventDefault());
   viewport.addEventListener('pointerdown', (e) => {
     if (!tab.editing) return; // another tab is editing (or this one is still starting)
+    if ($('#fileActions').classList.contains('open')) { setMore(false); return; } // that tap just closes the menu
     viewport.setPointerCapture(e.pointerId);
     const p = localPt(e);
     pointers.set(e.pointerId, p);
@@ -670,8 +675,9 @@
   }
 
   // ---------- quick colors (phone layouts) ----------
-  // The current color, then the colors in the design (most used first), then recent
-  // picks, so switching colors doesn't mean opening the full palette.
+  // The current color, then a few recent picks, then the colors in the design (most
+  // used first), so switching colors doesn't mean opening the full palette. One Tab
+  // stop; arrow keys move along it.
   let quickCounts = null;
   function renderQuick(recount) {
     if (recount || !quickCounts || quickCounts.length !== S.palette.length) quickCounts = countRegion();
@@ -704,14 +710,21 @@
       b.title = `${c.code} ${c.hex}`;
       box.appendChild(b);
     };
+    const n = (i) => (quickCounts[i] ? `, ${fmt(quickCounts[i])} in design` : '');
+    const recent = S.recent.map((k) => S.codeIndex.get(k)).filter((i) => i != null && i !== S.color).slice(0, 6);
+    recent.forEach((i) => add(i, `, recently used${n(i)}`));
     const used = [];
-    for (let i = 0; i < quickCounts.length; i++) if (quickCounts[i]) used.push(i);
+    for (let i = 0; i < quickCounts.length; i++) if (quickCounts[i] && !recent.includes(i)) used.push(i);
     used.sort((a, b) => quickCounts[b] - quickCounts[a]);
-    const shown = new Set();
-    used.slice(0, 30).forEach((i) => { shown.add(i); add(i, `, ${fmt(quickCounts[i])} in design`); });
-    const recent = S.recent.map((k) => S.codeIndex.get(k)).filter((i) => i != null && i !== S.color && !shown.has(i));
-    if (recent.length && shown.size) { const sep = document.createElement('span'); sep.className = 'quick-sep'; sep.setAttribute('aria-hidden', 'true'); box.appendChild(sep); }
-    recent.forEach((i) => add(i, ', recently used'));
+    if (recent.length && used.length) { const sep = document.createElement('span'); sep.className = 'quick-sep'; sep.setAttribute('aria-hidden', 'true'); box.appendChild(sep); }
+    used.slice(0, 30).forEach((i) => add(i, n(i)));
+    $$('button', box).forEach((b, k) => { b.tabIndex = k === 0 ? 0 : -1; });
+    cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded')));
+  }
+  // Choose a color to draw with (palette, quick row, counts): drawing tools come back.
+  function pickColor(i) {
+    selectColor(i);
+    if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
   }
   const phoneMQ = matchMedia('(max-width: 599px)');
   function setSheet(open) {
@@ -719,6 +732,8 @@
     sb.classList.toggle('expanded', open);
     t.setAttribute('aria-expanded', String(open));
     t.setAttribute('aria-label', open ? 'Hide colors and panels' : 'Show all colors and panels');
+    const cur = $('#quickColors [data-q=current]');
+    if (cur) cur.setAttribute('aria-expanded', String(open));
   }
   function setMore(open, moveFocus) {
     const fa = $('#fileActions'), more = $('#moreBtn');
@@ -861,16 +876,21 @@
       const lab = document.createElement('span');
       lab.textContent = `${trayName(r, c)} · ${fmt(n)}`;
       b.append(cv, lab);
-      b.addEventListener('click', () => focusTray(r, c));
+      b.addEventListener('click', () => focusTray(r, c, true));
       grid.appendChild(b);
     }
   }
 
-  function focusTray(r, c) {
+  function focusTray(r, c, fromPanel) {
     if (r == null) S.focus = null;
     else S.focus = { r, c };
     fitView();
     refreshPanels();
+    if (fromPanel && phoneMQ.matches && $('#sidebar').classList.contains('expanded')) {
+      const hadFocus = $('#trayGrid').contains(document.activeElement);
+      setSheet(false); // the canvas then grows and the tray is fitted again
+      if (hadFocus) $('#sheetToggle').focus();
+    }
   }
   function stepTray(d) {
     const across = traysAcross(), n = trayCount();
@@ -1721,8 +1741,19 @@
     $('#quickColors').addEventListener('click', (e) => {
       const b = e.target.closest('[data-q]');
       if (!b) return;
-      if (b.dataset.q === 'current') setSheet(true);
-      else selectColor(+b.dataset.q);
+      if (b.dataset.q === 'current') setSheet(!$('#sidebar').classList.contains('expanded'));
+      else pickColor(+b.dataset.q);
+    });
+    $('#quickColors').addEventListener('keydown', (e) => {
+      const items = $$('#quickColors button');
+      const k = items.indexOf(document.activeElement);
+      if (k < 0) return;
+      const to = { ArrowRight: k + 1, ArrowLeft: k - 1, Home: 0, End: items.length - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault();
+      const b = items[clamp(to, 0, items.length - 1)];
+      items.forEach((x) => { x.tabIndex = x === b ? 0 : -1; });
+      b.focus();
     });
     // Short screens (phones in landscape, flip-phone cover screens) can't spare a row
     // for the view settings, so they move into the ⋯ menu; the same elements, so their
@@ -1730,11 +1761,15 @@
     const shortMQ = matchMedia('(max-height: 520px)');
     const placeStageBar = () => {
       const bar = $('.stage-bar'), fa = $('#fileActions');
+      const focused = bar.contains(document.activeElement) ? document.activeElement : null;
       if (shortMQ.matches) { if (bar.parentElement !== fa) fa.insertBefore(bar, fa.querySelector('.repo-sep')); }
-      else if (bar.parentElement !== $('.stage')) $('.stage').insertBefore(bar, viewport);
+      else if (bar.parentElement !== $('.stage')) { $('.stage').insertBefore(bar, viewport); setMore(false); }
+      if (focused && document.activeElement !== focused && focused.offsetParent) focused.focus();
     };
     shortMQ.addEventListener('change', placeStageBar);
     placeStageBar();
+    // Crossing into a layout without the ⋯ menu closes it, so it doesn't linger unseen.
+    matchMedia('(max-width: 759px), (max-height: 520px)').addEventListener('change', (e) => { if (!e.matches) setMore(false); });
     // The folded-phone layout needs the top bar's height.
     new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', $('.topbar').offsetHeight + 'px')).observe($('.topbar'));
 
@@ -1808,11 +1843,13 @@
         b.setAttribute('aria-pressed', String(S.owned.has(c.code)));
         b.setAttribute('aria-label', `${c.code}, ${S.owned.has(c.code) ? 'in my collection' : 'not in my collection'}`);
       } else {
-        selectColor(c.i);
-        if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
+        pickColor(c.i);
         // Phones: picking from the full palette closes the sheet so the canvas is back;
-        // the color stays in the quick row.
-        if (phoneMQ.matches) setSheet(false);
+        // the color stays in the quick row, which keeps the focus.
+        if (phoneMQ.matches && $('#sidebar').classList.contains('expanded')) {
+          setSheet(false);
+          $('#quickColors [data-q=current]').focus();
+        }
       }
     });
 
@@ -1926,6 +1963,9 @@
       const k = e.key.toLowerCase();
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       if (e.key === 'Escape' && $('#fileActions').classList.contains('open')) { e.preventDefault(); setMore(false, true); return; }
+      if (e.key === 'Escape' && phoneMQ.matches && $('#sidebar').classList.contains('expanded') && !e.target.closest('dialog')) {
+        e.preventDefault(); setSheet(false); $('#sheetToggle').focus(); return;
+      }
       // Ctrl+S saves the project from anywhere, including while typing its name.
       if (!tab.editing) { if ((e.ctrlKey || e.metaKey) && k === 's') e.preventDefault(); return; } // another tab is editing
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
