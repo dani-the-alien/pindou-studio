@@ -90,19 +90,22 @@
   const FIX_KEY = 'pindou.colorFixes', DISPUTE_DE = 3;
   let disputed = null, colorFixes = null;
   function disputedColors() {
-    if (disputed) return disputed;
+    if (!disputed) disputed = findDisputed(DISPUTE_DE);
+    return disputed;
+  }
+  function findDisputed(minDE) {
     const lists = Object.values(PALETTES).map((p) => new Map(p.colors.map((c) => [c.code, c])));
     const lab = (hex) => Color.rgbToLab(...Color.hexToRgb(hex));
-    disputed = [];
+    const found = [];
     for (const [code, c] of lists[0]) {
       if (c.transparent || lists.some((l) => !l.has(code))) continue;
       const hexes = [...new Set(lists.map((l) => l.get(code).hex.toUpperCase()))];
       if (hexes.length < 2) continue;
       let most = 0;
       for (let a = 0; a < hexes.length; a++) for (let b = a + 1; b < hexes.length; b++) most = Math.max(most, Color.deltaE2000(lab(hexes[a]), lab(hexes[b])));
-      if (most > DISPUTE_DE) disputed.push({ code, hexes });
+      if (most > minDE) found.push({ code, hexes });
     }
-    return disputed;
+    return found;
   }
   // Only a disputed code set to one of its candidate colors is accepted from storage.
   function loadColorFixes() {
@@ -122,7 +125,10 @@
   // Rebuild the palette's colors in place: same codes in the same order, so cells stay valid.
   function recolorPalette() {
     S.palette = buildPalette(S.paletteId);
-    imgState.caches = new Map(); imgState.result = null; // matches made with the old colors
+    // matches made with the old colors must not be applied: convert again if the image
+    // dialog is open (its preview and "Use pattern" then follow the new colors)
+    imgState.caches = new Map(); imgState.result = null;
+    if ($('#imageDialog').open && imgState.img) { $('#imgApply').disabled = true; startConvert(); } else cancelConvert();
     rebuildPixmap(); refreshPanels(); requestDraw();
   }
   function setColorFix(code, hex) {
@@ -140,7 +146,7 @@
         i, code: c.code, hex, rgb,
         lab: Color.rgbToLab(rgb[0], rgb[1], rgb[2]),
         ok: Color.rgbToOklch(rgb[0], rgb[1], rgb[2]),
-        text: c.transparent ? '#333' : Color.contrastText(c.hex),
+        text: c.transparent ? '#333' : Color.contrastText(hex),
         transparent: !!c.transparent,
         series: c.code.match(/^[A-Z]+/)[0],
       };
@@ -766,10 +772,12 @@
   const check = { list: [], k: 0 };
   function openCheckColors() {
     check.list = disputedColors(); check.k = 0;
-    showCheckStep();
+    showCheckStep(true);
     showDialog($('#checkDialog'));
   }
-  function showCheckStep() {
+  // focusSwatch: after opening or picking. After Skip or Back, focus stays on that button,
+  // so pressing Enter again skips again rather than picking a color.
+  function showCheckStep(focusSwatch) {
     const n = check.list.length, done = check.k >= n;
     $('#checkStepBox').hidden = done; $('#checkSummary').hidden = !done;
     $('#checkBack').disabled = check.k === 0;
@@ -792,16 +800,16 @@
       b.setAttribute('aria-pressed', String(mine === hex));
       b.setAttribute('aria-label', `Swatch ${'AB'[k] || k + 1} (${hex})${mine === hex ? ', your choice' : ''}`);
       const sw = document.createElement('span'); sw.className = 'check-chip'; sw.style.background = hex;
-      const t = document.createElement('span'); t.textContent = `${'AB'[k] || k + 1}${mine === hex ? ' ✓' : ''}`;
+      const t = document.createElement('span'); t.textContent = `${'AB'[k] || k + 1}${mine === hex ? ' · your choice ✓' : ''}`;
       b.append(sw, t);
       return b;
     }));
-    (box.querySelector('[aria-pressed="true"]') || box.querySelector('button')).focus();
+    if (focusSwatch || document.activeElement === document.body || document.activeElement.disabled) (box.querySelector('[aria-pressed="true"]') || box.querySelector('button')).focus();
   }
   function checkPick(hex) {
     setColorFix(check.list[check.k].code, hex);
     check.k++;
-    showCheckStep();
+    showCheckStep(true);
   }
 
   // ---------- drawing from the keyboard ----------
@@ -2791,12 +2799,15 @@
     $('#checkSkip').addEventListener('click', () => { check.k++; showCheckStep(); });
     $('#checkBack').addEventListener('click', () => { check.k = Math.max(0, check.k - 1); showCheckStep(); });
     $('#checkReset').addEventListener('click', () => {
-      if (!colorFixes) colorFixes = loadColorFixes();
       colorFixes = {}; store.set(FIX_KEY, colorFixes); recolorPalette();
       showCheckStep(); toast('Colors are as published again.');
     });
     // another tab changed the corrections
-    window.addEventListener('storage', (e) => { if (e.key === FIX_KEY) { colorFixes = loadColorFixes(); recolorPalette(); } });
+    window.addEventListener('storage', (e) => {
+      if (e.key !== FIX_KEY) return;
+      colorFixes = loadColorFixes(); recolorPalette();
+      if ($('#checkDialog').open && check.k < check.list.length) showCheckStep(); // the step's "your choice" may have changed
+    });
 
     $('#linkCopy').addEventListener('click', copyLink);
     $('#linkQrBtn').addEventListener('click', toggleLinkQr);
@@ -3034,6 +3045,6 @@
   let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, simplifyCells, removeStrays, mergeOrder, reduceColors, simplerTries, disputedColors, get tabReady() { return tabReady; } };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, simplifyCells, removeStrays, mergeOrder, reduceColors, simplerTries, disputedColors, findDisputed, get tabReady() { return tabReady; } };
   boot();
 })();
