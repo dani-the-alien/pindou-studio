@@ -23,6 +23,17 @@ To install it as a desktop app (app-menu entry plus a small user-level local ser
 
 P pencil · E eraser · F fill · I eyedropper · R swap · H pan (or hold Space / middle-drag / two fingers) · Ctrl+Z / Ctrl+Shift+Z · + / − / 0 zoom · [ ] step through trays · Esc leave tray focus · Ctrl+S save
 
+## Development
+
+There's no build step: edit the files and reload. When you change anything in `js/` or `styles.css`, bump the version so browsers fetch the new files instead of reusing cached ones:
+
+```
+tools/bump-version.sh 0.3.0     # updates js/app.js and index.html together
+tools/bump-version.sh --check   # confirms they agree
+```
+
+The running version is shown in the status bar at the bottom of the app. If the page and script versions ever disagree, the app says so and asks for a full reload (Ctrl+Shift+R).
+
 ## Palette data
 
 `data/mard-221.json` and `data/mard-291.json` come from [HansBug/pindou-color-data](https://github.com/HansBug/pindou-color-data) (MIT, see `data/LICENSE-pindou-color-data`). `js/palettes.js` is generated from them.

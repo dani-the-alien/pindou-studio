@@ -71,6 +71,7 @@ This removes the service, menu entry, icon and installed copy. It doesn't touch 
 
 - **Menu entry does nothing / page won't load:** run `journalctl --user -u pindou-studio -n 50 --no-pager`. A message like "Address already in use" means another program has the port: re-run the installer with a different `PINDOU_PORT`, and tell the person their autosave stays with the old address.
 - **Service not running after a reboot:** `systemctl --user enable --now pindou-studio`.
+- **Something new is missing after an update** (an empty dropdown, a button that does nothing): the browser is probably reusing old cached files. Have them press Ctrl+Shift+R once. The status bar at the bottom shows the running version (e.g. "Pindou Studio v0.2.1"); compare it with `const VERSION` in `js/app.js` of the copy you installed.
 - **Wrong browser opens:** the menu entry uses the system default browser (`xdg-open`). They can change that in System Settings → Default Applications, or you can re-install with `--app-window`.
 
 ## About the colors

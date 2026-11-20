@@ -23,6 +23,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
+  const VERSION = '0.2.1'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   const TRANSPARENT_RGB = [226, 236, 246];
 
@@ -522,7 +523,7 @@
     if ((prev && cell && prev.i === cell.i) || (!prev && !cell)) return;
     requestDraw();
     const st = $('#status');
-    if (!cell) { st.innerHTML = '&nbsp;'; return; }
+    if (!cell) { st.textContent = `Pindou Studio v${VERSION}`; return; }
     const r = Math.floor(cell.y / S.tray), c = Math.floor(cell.x / S.tray);
     const v = S.cells[cell.i];
     const bead = v >= 0 ? `${S.palette[v].code} ${S.palette[v].hex}${S.palette[v].transparent ? ' (clear)' : ''}` : 'empty';
@@ -1306,6 +1307,19 @@
   function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview }); }
 
   // ---------- boot ----------
+  // If the page and this script come from different versions (a browser reused a
+  // cached copy after an update), say so plainly instead of half-working.
+  function checkVersion() {
+    const meta = document.querySelector('meta[name="pindou-version"]');
+    const page = meta ? meta.content : 'unknown';
+    if (page === VERSION) return;
+    const t = $('#toast');
+    t.textContent = `Pindou Studio was updated, but your browser mixed old and new files (page ${page}, script ${VERSION}). Press Ctrl+Shift+R to reload fully. Your design is safe.`;
+    t.hidden = false;
+    t.style.cursor = 'pointer';
+    t.onclick = () => { t.hidden = true; };
+  }
+
   function boot() {
     readTheme();
     const prefs = store.get('pindou.prefs', {});
@@ -1330,9 +1344,11 @@
     resizeCanvas();
     fitView();
     refreshPanels();
+    $('#status').textContent = `Pindou Studio v${VERSION}`;
+    checkVersion();
   }
 
   // Exposed for automated tests only.
-  window.__pindou = { S, convert, serialize, deserialize, countRegion, undo, redo, imgState, runConvert };
+  window.__pindou = { VERSION, S, convert, serialize, deserialize, countRegion, undo, redo, imgState, runConvert };
   boot();
 })();

@@ -63,7 +63,7 @@ cp -r "$SRC/index.html" "$SRC/styles.css" "$SRC/js" "$SRC/data" "$APPDIR/app.new
 [ -f "$SRC/README.md" ] && cp "$SRC/README.md" "$APPDIR/app.new/"
 # Cache-bust the script/style URLs so the browser can't mix an old app.js with a new page.
 STAMP="$(date +%s)"
-sed -i -E "s#(href=\"styles\.css|src=\"js/[a-z]+\.js)\"#\1?v=$STAMP\"#g" "$APPDIR/app.new/index.html"
+sed -i -E "s#(href=\"styles\.css|src=\"js/[a-z]+\.js)(\?v=([^\"]*))?\"#\1?v=\3-$STAMP\"#g" "$APPDIR/app.new/index.html"
 rm -rf "$APPDIR/app"
 mv "$APPDIR/app.new" "$APPDIR/app"
 
