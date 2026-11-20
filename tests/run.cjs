@@ -198,6 +198,8 @@ test('files and links from before the single palette open with every color', asy
 });
 test('My collection carries over from before, and has a 221-set preset', async (p) => {
   await p.evaluate(() => {
+    // as on the first load of this version: storage from before, and nothing saved since
+    __pindou.tab.state = 'paused'; __pindou.tab.editing = false;
     localStorage.removeItem('pindou.owned.mard');
     localStorage.setItem('pindou.owned.mard221', JSON.stringify(['A1', 'A2']));
     localStorage.setItem('pindou.owned.mard291', JSON.stringify(['P1']));
@@ -1923,7 +1925,7 @@ test('check colors: the disputed codes are the ones the two lists visibly disagr
   const d = await p.evaluate(() => __pindou.disputedColors().map((x) => x.code));
   eq(d.length, 11, 'how many: ' + d.join(' '));
   for (const c of ['H13', 'A25', 'F11', 'G8']) assert(d.includes(c), c + ' missing');
-  assert(!d.includes('H1'), 'the clear bead is never disputed');
+  assert(!(await p.evaluate(() => __pindou.findDisputed(0).some((x) => x.code === 'H1'))), 'the clear bead is never disputed, even with no threshold');
 });
 test('check colors: a choice recolors that code, keeps the design, and lasts', async (p) => {
   await stroke(p, 5);
@@ -1956,10 +1958,17 @@ test('check colors: Back, Skip, and going back to the published colors', async (
   eq(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')), '{}', 'stored corrections');
 });
 test('check colors: stored corrections that aren\'t candidate colors are ignored', async (p) => {
-  await p.evaluate(() => localStorage.setItem('pindou.colorFixes', JSON.stringify({ A1: '#000000', H13: '#123456', H1: '#FFFFFF' })));
-  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
-  const pal = await p.evaluate(() => { const id = __pindou.S.paletteId; return Object.fromEntries(PALETTES[id].colors.filter((c) => ['A1', 'H13', 'H1'].includes(c.code)).map((c) => [c.code, c.hex])); });
-  for (const code of ['A1', 'H13', 'H1']) eq(await hexOf(p, code), pal[code], code);
+  const [a, b] = await p.evaluate(() => __pindou.disputedColors().slice(0, 2));
+  const pub = { [a.code]: await hexOf(p, a.code), [b.code]: await hexOf(p, b.code) };
+  const lower = a.hexes.find((h) => h !== pub[a.code]).toLowerCase();
+  const reload = async (v) => { await p.evaluate((v) => localStorage.setItem('pindou.colorFixes', v), v); await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady); };
+  // not a disputed code, not a candidate color, another code's candidate: ignored
+  await reload(JSON.stringify({ A1: '#000000', H13: '#123456', H1: '#FFFFFF', [b.code]: a.hexes[0] }));
+  eq([await hexOf(p, a.code), await hexOf(p, b.code)], [pub[a.code], pub[b.code]], 'after odd corrections');
+  // a candidate written in lower case is fine
+  await reload(JSON.stringify({ [a.code]: lower }));
+  eq(await hexOf(p, a.code), lower.toUpperCase(), 'lower-case candidate');
+  for (const v of ['[1,2]', 'null', '"text"', '{"__proto__":{"x":1}}']) { await reload(v); eq(p.errors, [], 'page errors after ' + v); }
 });
 test('check colors: a choice in one tab recolors another open tab', async (p) => {
   const t = await secondTab(p);
@@ -2012,6 +2021,25 @@ test('keyboard: it says when picking or filling does nothing, and when a fill wo
   assert(/^Filled\./.test(await p.textContent('#canvasLive')), 'real fill: ' + await p.textContent('#canvasLive'));
   await keys(p, 'Enter');
   assert(/^Nothing changed\./.test(await p.textContent('#canvasLive')), 'fill with the same color: ' + await p.textContent('#canvasLive'));
+});
+test('check colors: Enter on Skip skips again, instead of picking', async (p) => {
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  await p.focus('#checkSkip'); await p.keyboard.press('Enter'); await p.keyboard.press('Enter');
+  assert(/Bead 3 of 11/.test(await p.textContent('#checkStep')), 'step: ' + await p.textContent('#checkStep'));
+  eq(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')), null, 'stored corrections');
+});
+test('check colors: a correction from another tab re-converts an open image instead of losing it', async (p) => {
+  const t = await secondTab(p); // paused; give editing to it, then open the image dialog there
+  await t.click('#tabTake'); await t.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t.click('[data-action=import-image]');
+  await t.setInputFiles('#imgFile', await makeImage(t, 120, 60));
+  await t.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  // the paused tab can't open the wizard; write the correction as another tab would
+  await p.evaluate(() => { const d = __pindou.disputedColors()[0]; localStorage.setItem('pindou.colorFixes', JSON.stringify({ [d.code]: d.hexes[1] })); });
+  await t.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'pindou.colorFixes' })));
+  await t.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 10000 });
+  await t.click('#imgApply'); await t.waitForTimeout(200);
+  eq(await t.evaluate(() => [__pindou.S.w, __pindou.S.h]), [52, 26], 'imported size');
 });
 // ---------- runner ----------
 (async () => {
