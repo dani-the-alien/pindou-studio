@@ -952,6 +952,9 @@
     const name = typeof d.name === 'string' && d.name.trim() ? d.name.slice(0, 200) : 'Untitled';
     return { state: { paletteId, tray, w, h, cells }, name, missing };
   }
+  function listCodes(codes) {
+    return codes.length <= 20 ? codes.join(', ') : `${codes.slice(0, 20).join(', ')} and ${codes.length - 20} more`;
+  }
   // Load without an undo step (restoring the autosave at startup).
   function loadProject(d) {
     const { state, name, missing } = parseProject(d);
@@ -1028,7 +1031,7 @@
       return s;
     };
     const format = num();
-    if (format !== LINK_FORMAT) throw new Error('it was made by a newer version of Pindou Studio');
+    if (format !== LINK_FORMAT) throw Object.assign(new Error('it was made by a newer version of Pindou Studio. Reload this page to get the newest version (Ctrl+Shift+R, or ⌘⇧R); the link is still in the address bar'), { keepLink: true });
     const name = str(), palette = str(), tray = num(), w = num(), h = num();
     if (w < 1 || h < 1 || w > MAX_DIM || h > MAX_DIM) throw new Error('its size is invalid');
     const count = num();
@@ -1061,6 +1064,7 @@
     let url;
     try { url = location.href.split('#')[0] + '#' + LINK_KEY + await packDesign(serialize()); }
     catch { toast("This browser can't make pattern links. Use Save and share the file instead.", { sticky: true }); return; }
+    if (!tab.editing) return;
     if (url.length > LINK_MAX) {
       toast(`This design is too detailed to fit in a link (it would be ${Math.round(url.length / 1000)} thousand characters; links hold up to ${LINK_MAX / 1000} thousand). Use Save and share the .pindou.json file instead.`, { sticky: true });
       return;
@@ -1080,12 +1084,12 @@
   // (Ctrl+D, the star) saves the design, since pages can't add bookmarks themselves.
   // Per tab (sessionStorage), so it lasts through a reload of that tab only.
   let linkLive = (() => { try { return sessionStorage.getItem('pindou.linkLive') === '1'; } catch { return false; } })();
-  let addressTimer = null, addressSeq = 0, addressTooBig = false;
+  let addressTimer = null, addressSeq = 0;
   function setLinkLive(on) {
     linkLive = on;
     try { if (on) sessionStorage.setItem('pindou.linkLive', '1'); else sessionStorage.removeItem('pindou.linkLive'); } catch { /* not kept past a reload */ }
     clearTimeout(addressTimer); addressSeq++;
-    if (on) { addressTooBig = false; syncAddress(); }
+    if (on) syncAddress();
     else { if (linkInAddress() != null && linkInAddress() === ownLink()) clearLinkFromAddress(); setOwnLink(null); }
   }
   function scheduleAddressSync() {
@@ -1098,21 +1102,22 @@
     const seq = ++addressSeq;
     let url;
     try { url = location.href.split('#')[0] + '#' + LINK_KEY + await packDesign(serialize()); } catch { return; }
-    if (seq !== addressSeq || !linkLive || !tab.editing || linkBusy) return; // a newer change, or things moved on
+    // a newer change, things moved on, or a link just arrived (its hashchange is on the way)
+    if (seq !== addressSeq || !linkLive || !tab.editing || linkBusy || incomingLink() != null) return;
     if (url.length > LINK_MAX) {
-      if (linkInAddress() != null) clearLinkFromAddress();
-      setOwnLink(null);
-      if (!addressTooBig) { addressTooBig = true; toast('This design is now too detailed for a link, so the address bar no longer holds it. Use Save to keep it as a file.', { sticky: true }); }
+      setLinkLive(false);
+      toast('This design is now too detailed for a link, so "Keep this design\'s link in the address bar" is off. Use Save to keep it as a file.', { sticky: true });
       return;
     }
-    if (addressTooBig) { addressTooBig = false; toast("The design fits in a link again, so it's back in the address bar."); }
     setOwnLink(url.slice(url.indexOf('#') + 1 + LINK_KEY.length));
     if (location.href !== url) history.replaceState(history.state, '', url);
   }
   // This tab stopped editing: its address would be an old copy, so take the design out.
   function dropLiveAddress() {
     clearTimeout(addressTimer); addressSeq++;
-    if (linkLive && !linkBusy && linkInAddress() != null && linkInAddress() === ownLink()) clearLinkFromAddress();
+    const own = ownLink();
+    if (own != null && linkInAddress() === own) clearLinkFromAddress();
+    setOwnLink(null); // from now on, any link in this tab's address is one it was given
   }
   function sameAsCurrent(state, name) {
     if (state.w !== S.w || state.h !== S.h || state.paletteId !== S.paletteId || state.tray !== S.tray || name !== S.name) return false;
@@ -1126,13 +1131,13 @@
       input.focus(); input.select();
       try { ok = document.execCommand('copy'); } catch { ok = false; }
     }
-    if (ok) $('#linkCopyLabel').textContent = 'Copied ✓';
+    if (ok) { $('#linkCopyLabel').textContent = 'Copied ✓'; toast('Link copied.'); }
     else { input.focus(); input.select(); toast('Copying was blocked here: the link is selected, so copy it with Ctrl+C (⌘C), or long-press it.'); }
   }
 
   // Open the pattern in the address, if there is one. Waits while this tab is paused
   // (becomeEditor calls this again), and asks before replacing a design with beads in it.
-  let linkBusy = false, linkAgain = false;
+  let linkBusy = false, linkAgain = false, linkAsking = null;
   async function openLinkFromAddress() {
     if (linkBusy) { linkAgain = true; return; }
     const data = incomingLink();
@@ -1148,10 +1153,11 @@
       let parsed;
       try { parsed = await unpackDesign(data); }
       catch (err) {
-        clearLinkFromAddress();
+        if (!err.keepLink) clearLinkFromAddress();
         toast(`Couldn't open the pattern in this link: ${err.message}. Your design wasn't changed.`, { sticky: true });
         return;
       }
+      if (!tab.editing) return; // editing moved away while unpacking: the link waits for it to come back
       if (incomingLink() !== data) return; // another link arrived meanwhile: that one is next
       const { state, name, missing } = parsed;
       if (sameAsCurrent(state, name)) { clearLinkFromAddress(); return; } // already open here
@@ -1163,6 +1169,7 @@
         const used = new Set(); let beads = 0;
         for (const v of state.cells) if (v >= 0) { used.add(v); beads++; }
         $('#linkOpenText').textContent = `“${name}”: ${state.w} × ${state.h}, ${beads.toLocaleString()} bead${beads === 1 ? '' : 's'} in ${used.size} color${used.size === 1 ? '' : 's'}.`;
+        linkAsking = data;
         choice = await new Promise((done) => {
           const d = $('#linkOpenDialog');
           d.returnValue = '';
@@ -1180,11 +1187,11 @@
       const undoNote = hadBeads ? ' Undo brings back your previous design.' : '';
       replaceState({ ...state, name }, missing.length ? null : `Opened “${name}” from a link.${undoNote}`);
       if (missing.length) {
-        toast(`Opened “${name}” from a link, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${missing.join(', ')}.${undoNote}`, { sticky: true });
+        toast(`Opened “${name}” from a link, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${listCodes(missing)}.${undoNote}`, { sticky: true });
       }
       autosave();
     } finally {
-      linkBusy = false;
+      linkBusy = false; linkAsking = null;
       if (linkAgain) { linkAgain = false; openLinkFromAddress(); } else scheduleAddressSync();
     }
   }
@@ -1418,6 +1425,7 @@
   }
   function showTabNotice() {
     tab.blocked = true;
+    dropLiveAddress();
     $('#tabText').textContent = (tab.everEdited
       ? 'Editing moved to another tab, so this one is paused. That tab has everything from here.'
       : 'Pindou Studio is already open in another tab or window.')
@@ -2217,11 +2225,11 @@
       navigator.share({ title: S.name, url: $('#linkText').value }).catch(() => { /* cancelled */ });
     });
     window.addEventListener('hashchange', () => {
+      // asking about a link that's no longer in the address (Back, or a newer link): drop the question
+      const ask = $('#linkOpenDialog');
+      if (ask.open && incomingLink() !== linkAsking) ask.close('superseded');
       if (incomingLink() == null) return;
       if (tab.blocked) { if (tab.state === 'paused') showTabNotice(); return; } // opens once this tab edits
-      // still asking about an earlier link: drop that question and ask about this one
-      const ask = $('#linkOpenDialog');
-      if (ask.open) ask.close('superseded');
       openLinkFromAddress();
     });
 
@@ -2235,7 +2243,7 @@
       S.focus = null;
       replaceState({ ...state, name }, missing.length ? null : `Opened ${name}. Undo brings back the previous design.`);
       if (missing.length) {
-        toast(`Opened ${name}, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${missing.join(', ')}. Undo brings back the previous design.`, { sticky: true });
+        toast(`Opened ${name}, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${listCodes(missing)}. Undo brings back the previous design.`, { sticky: true });
       }
       autosave();
     });

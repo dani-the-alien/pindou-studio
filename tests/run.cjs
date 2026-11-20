@@ -1141,7 +1141,7 @@ test('share link: Save mine, then open downloads the old design first', async (p
   const url = await shareUrl(p);
   const t = await openLink(browser, p.url().split('#')[0]);
   await stroke(t, 3); await t.waitForTimeout(500);
-  await t.evaluate(() => location.reload()); await t.waitForFunction(() => window.__pindou); // a real load this time
+  await t.evaluate(() => location.reload()); await t.waitForFunction(() => window.__pindou); // a fresh page (the link then comes by hashchange)
   await t.evaluate(() => __pindou.tabReady);
   const dl = t.waitForEvent('download');
   await t.evaluate((u) => { location.href = u; }, url);
@@ -1315,6 +1315,74 @@ test('share link: a link arriving while a paused tab is already taking over leav
   await t.evaluate((u) => { location.hash = u.split('#')[1]; }, a); await t.waitForTimeout(200);
   eq(await t.evaluate(() => document.querySelector('#tabTake').getAttribute('aria-disabled')), 'true', 'button enabled again');
   eq(await t.textContent('#tabTakeLabel'), 'Taking over…', 'label');
+});
+
+test('share link: a bookmarked design opened in a tab that has since paused still asks to open', async (p) => {
+  await stroke(p, 4); await switchOn(p);
+  const bookmark = p.url(); // the design as bookmarked
+  const t = await secondTab(p);
+  await t.click('#tabTake'); await t.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t.click('[data-tool=pencil]'); for (const x of [30, 31, 32]) await t.mouse.click(...await cellPoint(t, x, 30));
+  await t.waitForTimeout(500);
+  await p.evaluate((u) => { location.hash = u.split('#')[1]; }, bookmark); await p.waitForTimeout(200);
+  assert(/pattern from your link opens here/.test(await p.textContent('#tabText')), 'link not noticed in the paused tab');
+  await p.click('#tabTake');
+  await p.waitForFunction(() => document.querySelector('#linkOpenDialog').open, null, { timeout: 5000 });
+  await p.click('#linkOpenDialog button[value=open]'); await p.waitForTimeout(200);
+  eq(await beads(p), 4, 'beads from the bookmark');
+});
+test('share link: a tab that loses editing while unpacking a link doesn\'t ask over the pause notice', async (p) => {
+  await stroke(p, 4); const a = await shareUrl(p);
+  const t = await secondTab(p);
+  await t.click('#tabTake'); await t.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t.click('[data-tool=pencil]'); await t.mouse.click(...await cellPoint(t, 30, 30)); await t.waitForTimeout(400);
+  // slow the unzip down so the other tab can take over in the middle of it
+  await t.evaluate(() => {
+    const D = window.DecompressionStream;
+    window.DecompressionStream = class { constructor(f) { const d = new D(f); this.writable = d.writable; this.readable = d.readable.pipeThrough(new TransformStream({ async transform(c, ctl) { await new Promise((r) => setTimeout(r, 1500)); ctl.enqueue(c); } })); } };
+  });
+  await t.evaluate((u) => { location.hash = u.split('#')[1]; }, a);
+  await t.waitForTimeout(100);
+  await p.click('#tabTake'); await p.waitForFunction(() => __pindou.tab.editing);
+  await t.waitForTimeout(2000);
+  eq(await t.evaluate(() => [__pindou.tab.editing, document.querySelector('#linkOpenDialog').open]), [false, false], '[editing, asking]');
+  assert((await hashOf(t)).startsWith('#pattern='), 'link dropped');
+});
+test('share link: going Back while the question is open drops the question', async (p, browser) => {
+  await stroke(p, 8); const a = await shareUrl(p);
+  const t = await openLink(browser, p.url().split('#')[0]);
+  await stroke(t, 3);
+  await t.evaluate((u) => { location.hash = u.split('#')[1]; }, a);
+  await t.waitForFunction(() => document.querySelector('#linkOpenDialog').open, null, { timeout: 5000 });
+  await t.goBack(); await t.waitForTimeout(300);
+  eq(await t.evaluate(() => document.querySelector('#linkOpenDialog').open), false, 'question still open');
+  eq(await beads(t), 3, 'beads');
+  await t.ctx.close();
+});
+test('share link: the address switch turns itself off when the design grows too big for a link', async (p) => {
+  await stroke(p, 4); await switchOn(p);
+  await p.evaluate(() => {
+    const pal = __pindou.S.palette, w = 300, h = 300;
+    window.__big = { format: 'pindou-studio', version: 1, name: 'noise', palette: __pindou.S.paletteId, tray: 52, w, h, legend: pal.map((c) => c.code), cells: Array.from({ length: w * h }, () => (Math.random() * pal.length) | 0) };
+  });
+  await openFile(p, await p.evaluate(() => JSON.stringify(window.__big)));
+  await p.waitForFunction(() => /is off/.test(document.querySelector('#toastText').textContent), null, { timeout: 5000 });
+  eq(await hashOf(p), '', 'address');
+  eq(await p.evaluate(() => sessionStorage.getItem('pindou.linkLive')), null, 'switch still on');
+});
+test('share link: a link from a newer version stays in the address', async (p) => {
+  const data = await p.evaluate(async () => {
+    const z = new Uint8Array(await new Response(new Blob([new Uint8Array([9, 0, 0])]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+    return btoa(String.fromCharCode(...z)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  });
+  await p.evaluate((d) => { location.hash = 'pattern=' + d; }, data);
+  await p.waitForFunction(() => /newer version/.test(document.querySelector('#toastText').textContent), null, { timeout: 3000 });
+  eq(await hashOf(p), '#pattern=' + data, 'address');
+});
+test('opening a file or link with many unknown codes lists only some of them', async (p) => {
+  await openFile(p, { format: 'pindou-studio', version: 1, name: 'x', palette: 'mard-221', tray: 52, w: 2, h: 1, legend: Array.from({ length: 500 }, (_, i) => 'Z' + i), cells: [0, 1] });
+  const txt = await p.textContent('#toastText');
+  assert(/and 480 more/.test(txt) && txt.length < 600, 'message: ' + txt.slice(0, 120) + '… (' + txt.length + ' chars)');
 });
 
 // ---------- runner ----------

@@ -192,11 +192,11 @@
   </dialog>
 
   <!-- Opening a link while a design is open -->
-  <dialog id="linkOpenDialog" aria-labelledby="linkOpenTitle" aria-describedby="linkOpenText">
+  <dialog id="linkOpenDialog" aria-labelledby="linkOpenTitle" aria-describedby="linkOpenText linkOpenHint">
     <form method="dialog" class="dlg">
       <h2 id="linkOpenTitle">Open the shared pattern?</h2>
       <p id="linkOpenText"></p>
-      <p class="hint">It replaces the design you have open here. Undo brings yours back while this tab stays open; to keep a copy for later, save yours first.</p>
+      <p class="hint" id="linkOpenHint">It replaces the design you have open here. Undo brings yours back while this tab stays open; to keep a copy for later, save yours first.</p>
       <div class="dlg-actions">
         <button value="open" class="primary">Open it</button>
         <button value="save-open">Save mine, then open</button>
