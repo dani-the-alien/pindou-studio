@@ -1882,6 +1882,15 @@ test('wheel: a high-resolution wheel zooms in proportion, not a full step per ev
   const two = await p.evaluate(() => __pindou.S.view.scale) / s2;
   assert(Math.abs(one - two) < 0.01, `one notch ${one.toFixed(3)}× vs two halves ${two.toFixed(3)}×`);
 });
+test('wheel: Shift+wheel in Firefox (lines) pans a useful distance; part-notches scale with wheelDeltaY', async (p) => {
+  const ox = await p.evaluate(() => __pindou.S.view.ox);
+  await wheelBurst(p, [{ deltaY: 3, deltaMode: 1, shiftKey: true }]);
+  const moved = Math.abs(await p.evaluate(() => __pindou.S.view.ox) - ox);
+  assert(moved >= 50, 'a Firefox Shift+wheel notch panned ' + moved + ' px');
+  await gap(p);
+  // a high-resolution wheel in Chrome at 150% page zoom: half a notch is wheelDeltaY 60, deltaY 33.3
+  eq(await wheelBurst(p, [{ deltaY: 66.67, wheelDeltaY: -120 }, { deltaY: 33.33, wheelDeltaY: -60 }]), [ZOOM_OUT, +(1 / Math.sqrt(1.2)).toFixed(3)], 'a notch, then half a notch');
+});
 test('wheel: deltaMode is read before the deltas (Firefox switches to pixels otherwise)', async (p) => {
   const firsts = await p.evaluate(() => {
     const v = document.querySelector('#viewport'), r = v.getBoundingClientRect(), firsts = [];
