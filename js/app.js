@@ -7,7 +7,7 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }, // false: storage full or unavailable
   };
   const fmt = (n) => n.toLocaleString();
   // Messages. The toast is a popover so it sits in the browser's top layer, above
@@ -52,8 +52,10 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.0.0'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.1.0'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
+  // Printed on exports and sheets so people who see a pattern can find the app.
+  const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
   const TRANSPARENT_RGB = [226, 236, 246];
 
   // ---------- state ----------
@@ -70,6 +72,7 @@
     view: { scale: 10, ox: 0, oy: 0 },
     focus: null, // {r, c}
     owned: new Set(),
+    recent: [], // codes of recently picked colors, newest first
     editOwned: false,
     filter: 'all', search: '', sort: 'count', pview: 'family',
     undo: [], redo: [],
@@ -167,10 +170,12 @@
       if (used[i]) { lost.push(c.code); lostBeads += used[i]; }
     });
     const name = PALETTES[id].name;
+    if (lost.length) saveBeforeDialog();
     if (lost.length && !confirm(`${name} doesn't have ${lost.length} of the colors in this design (${lost.slice(0, 12).join(', ')}${lost.length > 12 ? ', …' : ''}).\n\nSwitching replaces those ${fmt(lostBeads)} beads with the closest ${name} colors. You can undo it afterwards.`)) {
       $('#paletteSelect').value = S.paletteId;
       return;
     }
+    if (!tab.editing) { $('#paletteSelect').value = S.paletteId; return; } // handed over while the confirm() was open
     const cells = S.cells.map((v) => (v < 0 ? -1 : map[v]));
     replaceState({ ...snapshot(), paletteId: id, cells },
       lost.length ? `Switched to ${name}: ${fmt(lostBeads)} beads changed to the closest colors. Undo switches back.` : `Switched to ${name}`);
@@ -232,11 +237,32 @@
 
   function resizeCanvas() {
     const r = viewport.getBoundingClientRect();
+    updateBelowCanvas();
+    // Hidden (printing, a collapsed layout): keep the view as it is for when it's back.
+    if (!r.width || !r.height) return;
     dpr = window.devicePixelRatio || 1;
+    // When the canvas changes size (rotating, folding or unfolding, opening the bottom
+    // sheet): a design (or focused tray) that was fully in view is fitted again;
+    // otherwise the zoom stays and whatever was in the middle stays in the middle.
+    let refit = false;
+    if (vw > 0 && vh > 0) {
+      const v = S.view, t = S.focus ? trayRect(S.focus.r, S.focus.c) : { x: 0, y: 0, w: S.w, h: S.h };
+      const x0 = v.ox + t.x * v.scale, y0 = v.oy + t.y * v.scale, x1 = x0 + t.w * v.scale, y1 = y0 + t.h * v.scale;
+      refit = x0 >= -1 && y0 >= -1 && x1 <= vw + 1 && y1 <= vh + 1;
+      S.view.ox += (r.width - vw) / 2; S.view.oy += (r.height - vh) / 2;
+    }
     vw = r.width; vh = r.height;
     canvas.width = Math.max(1, Math.round(vw * dpr));
     canvas.height = Math.max(1, Math.round(vh * dpr));
-    requestDraw();
+    if (refit) fitView(); else requestDraw();
+  }
+  // Messages on phones sit just above the controls at the bottom of the screen.
+  let belowCanvas = -1;
+  function updateBelowCanvas() {
+    const bar = $('.workspace').classList.contains('sheet-open') ? null : $('.sheet-bar'), tb = $('.toolbar');
+    const tops = [bar, tb].map((el) => el && el.getBoundingClientRect()).filter((r) => r && r.height).map((r) => r.top);
+    const v = tops.length ? Math.max(0, Math.round(innerHeight - Math.min(...tops))) : 0;
+    if (v !== belowCanvas) { belowCanvas = v; document.documentElement.style.setProperty('--below-canvas', v + 'px'); }
   }
   function requestDraw() {
     if (drawQueued) return;
@@ -455,6 +481,7 @@
     loadGrid(st); // refits the view only if the size changed
   }
   function replaceState(next, label) {
+    if (!tab.editing) return; // e.g. a file picker or confirm() that finished after another tab took over
     const before = snapshot();
     applyState(next);
     pushUndo({ type: 'snap', before, after: snapshot() });
@@ -506,9 +533,13 @@
 
   viewport.addEventListener('contextmenu', (e) => e.preventDefault());
   viewport.addEventListener('pointerdown', (e) => {
+    if (!tab.editing) return; // another tab is editing (or this one is still starting)
+    const closingMenu = $('#fileActions').classList.contains('open');
+    if (closingMenu) setMore(false); // this touch only closes the menu…
     viewport.setPointerCapture(e.pointerId);
     const p = localPt(e);
     pointers.set(e.pointerId, p);
+    if (closingMenu && pointers.size === 1) { gesture = { kind: 'none' }; return; } // …but a second finger still makes it a pinch
     if (pointers.size === 2) {
       // second finger: abandon any stroke and pinch-zoom instead
       cancelStroke();
@@ -568,6 +599,7 @@
     }
   });
   function runTapTool(g) {
+    if (!tab.editing) return;
     beginStroke();
     if (g.tool === 'fill') floodFill(g.cell.i, S.color, S.focus ? trayRect(S.focus.r, S.focus.c) : null);
     else replaceAll(S.cells[g.cell.i], S.color);
@@ -649,6 +681,86 @@
     sw.title = `${c.code} ${c.hex}`;
     sw.setAttribute('aria-label', `Current color ${c.code}`);
     $$('#swatches .sw').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.i === i)));
+    S.recent = [c.code, ...S.recent.filter((k) => k !== c.code)].slice(0, 8);
+    renderQuick();
+  }
+
+  // ---------- quick colors (phone layouts) ----------
+  // The current color, then a few recent picks, then the colors in the design (most
+  // used first), so switching colors doesn't mean opening the full palette. One Tab
+  // stop; arrow keys move along it.
+  let quickCounts = null;
+  function renderQuick(recount) {
+    if (recount || !quickCounts || quickCounts.length !== S.palette.length) quickCounts = countRegion();
+    const box = $('#quickColors'), had = box.contains(document.activeElement);
+    keepFocus(box, 'data-q', buildQuick);
+    if (had && !box.contains(document.activeElement)) { const cur = $('[data-q=current]', box); if (cur) cur.focus(); }
+  }
+  function quickSwatch(c, extra) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sw' + (c.transparent ? ' clear' : '') + (extra || '');
+    b.style.background = c.hex; b.style.color = c.text;
+    b.textContent = c.code;
+    return b;
+  }
+  function buildQuick() {
+    const box = $('#quickColors');
+    box.innerHTML = '';
+    const cur = S.palette[S.color];
+    if (!cur) return;
+    const cb = quickSwatch(cur, ' current');
+    cb.dataset.q = 'current';
+    cb.setAttribute('aria-label', sheetMode() ? `Current color ${cur.code}. Show all colors` : `Current color ${cur.code}`);
+    cb.title = `${cur.code} ${cur.hex}`;
+    box.appendChild(cb);
+    const add = (i, label) => {
+      const c = S.palette[i];
+      const b = quickSwatch(c);
+      b.dataset.q = String(i);
+      b.setAttribute('aria-pressed', String(i === S.color));
+      b.setAttribute('aria-label', `${c.code}${label}`);
+      b.title = `${c.code} ${c.hex}`;
+      box.appendChild(b);
+    };
+    const n = (i) => (quickCounts[i] ? `, ${fmt(quickCounts[i])} in design` : '');
+    const recent = S.recent.map((k) => S.codeIndex.get(k)).filter((i) => i != null && i !== S.color).slice(0, 6);
+    recent.forEach((i) => add(i, `, recently used${n(i)}`));
+    const used = [];
+    for (let i = 0; i < quickCounts.length; i++) if (quickCounts[i] && i !== S.color && !recent.includes(i)) used.push(i);
+    used.sort((a, b) => quickCounts[b] - quickCounts[a]);
+    if (recent.length && used.length) { const sep = document.createElement('span'); sep.className = 'quick-sep'; sep.setAttribute('aria-hidden', 'true'); box.appendChild(sep); }
+    used.slice(0, 30).forEach((i) => add(i, n(i)));
+    $$('button', box).forEach((b, k) => { b.tabIndex = k === 0 ? 0 : -1; });
+    if (sheetMode()) { cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded'))); cb.setAttribute('aria-controls', 'sidebar'); }
+  }
+  // Choose a color to draw with (palette, quick row, counts): drawing tools come back.
+  function pickColor(i) {
+    selectColor(i);
+    if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
+  }
+  const phoneMQ = matchMedia('(max-width: 599.98px)'), foldedMQ = matchMedia('(vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+  // Is the sidebar a bottom sheet right now? (phones, except when folded at the hinge,
+  // where it's always open). Checked separately: browsers that don't know the
+  // segments feature would make a combined "not (...)" query false altogether.
+  const sheetMode = () => phoneMQ.matches && !foldedMQ.matches;
+  function setSheet(open) {
+    const sb = $('#sidebar'), t = $('#sheetToggle');
+    sb.classList.toggle('expanded', open);
+    $('.workspace').classList.toggle('sheet-open', open);
+    requestAnimationFrame(updateBelowCanvas);
+    t.setAttribute('aria-expanded', String(open));
+    t.setAttribute('aria-label', open ? 'Hide colors and panels' : 'Show all colors and panels');
+    const cur = $('#quickColors [data-q=current]');
+    if (cur) cur.setAttribute('aria-expanded', String(open));
+  }
+  function setMore(open, moveFocus) {
+    const fa = $('#fileActions'), more = $('#moreBtn');
+    if (!open && !fa.classList.contains('open')) return;
+    fa.classList.toggle('open', open);
+    more.setAttribute('aria-expanded', String(open));
+    if (!open && !$('#exportMenu').hidden) closeMenu(false);
+    if (moveFocus) (open ? fa.querySelector('button') : more).focus();
   }
 
   // ---------- counts ----------
@@ -673,13 +785,14 @@
   // ---------- panels ----------
   let panelTimer;
   function changed() {
-    if (booted) dirty = true;
+    if (booted && tab.editing) { dirty = true; tab.everEdited = true; }
     requestDraw();
     renderStatus();
     clearTimeout(panelTimer);
     panelTimer = setTimeout(() => { refreshPanels(); autosave(); }, 120);
   }
   function refreshPanels() {
+    renderQuick(true);
     renderSwatches();
     renderCounts();
     renderTrays();
@@ -752,7 +865,7 @@
     for (const { c, n } of list) {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><button type="button" class="code-btn" data-i="${c.i}" title="Use ${c.code}">${c.code}</button></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
-      tr.addEventListener('click', () => selectColor(c.i));
+      tr.addEventListener('click', () => { pickColor(c.i); if (sheetMode() && $('#sidebar').classList.contains('expanded')) setSheet(false); });
       body.appendChild(tr);
     }
     if (!list.length) body.innerHTML = '<tr><td class="muted">Nothing placed yet.</td></tr>';
@@ -782,16 +895,21 @@
       const lab = document.createElement('span');
       lab.textContent = `${trayName(r, c)} · ${fmt(n)}`;
       b.append(cv, lab);
-      b.addEventListener('click', () => focusTray(r, c));
+      b.addEventListener('click', () => focusTray(r, c, true));
       grid.appendChild(b);
     }
   }
 
-  function focusTray(r, c) {
+  function focusTray(r, c, fromPanel) {
     if (r == null) S.focus = null;
     else S.focus = { r, c };
     fitView();
     refreshPanels();
+    if (fromPanel && sheetMode() && $('#sidebar').classList.contains('expanded')) {
+      const hadFocus = $('#trayGrid').contains(document.activeElement);
+      setSheet(false); // the canvas then grows and the tray is fitted again
+      if (hadFocus) $('#sheetToggle').focus();
+    }
   }
   function stepTray(d) {
     const across = traysAcross(), n = trayCount();
@@ -854,11 +972,288 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flushAutosave, 300);
   }
+  // A blocking dialog (confirm, prompt, print) can end with the tab being closed
+  // without the usual pagehide save, so save first.
+  function saveBeforeDialog() { if (tab.state === 'editing') saveNow(); }
   function flushAutosave() {
     clearTimeout(saveTimer);
-    if (!dirty) return;
-    store.set('pindou.autosave', serialize());
-    dirty = false;
+    if (!dirty || !tab.editing) return;
+    saveNow();
+  }
+
+  // ---------- one editing tab at a time ----------
+  // All tabs share one autosave. The rule: the tab holding the "editor" Web Lock is
+  // the only one that changes the design or writes the autosave, and it always does.
+  // Every other tab shows a notice that can't be dismissed.
+  //
+  // Editing only ever moves by hand-over, never by taking the lock away: the paused
+  // tab asks; the editing tab stops, saves, sends its design over the BroadcastChannel
+  // and lets go. If the editing tab can't answer (a dialog is open in it, or it's
+  // frozen), the paused tab waits and says so; it takes over as soon as the other
+  // tab answers or is closed. So a live editing tab always saves before editing
+  // moves; what a crash or a killed tab hadn't saved yet (at most the last moment,
+  // and nothing from before a dialog opened) can't be recovered.
+  //
+  // Each editor gets a new generation number, stored next to the autosave; when
+  // taking over, copies (from storage or by message) are ranked by generation. While
+  // a tab is asking, the other paused tabs step out of the queue, so the lock goes to
+  // the tab that asked. Only visible paused tabs wait in line, so reloading doesn't
+  // hand editing to a background tab. Without Web Locks (very old browsers) every tab
+  // edits, as before.
+  const LOCK = 'pindou.editor', GEN_KEY = 'pindou.gen', SLOW_ANSWER = 3000, PAYLOAD_WAIT = 400;
+  const tab = {
+    editing: true,   // may this tab change the design and write the autosave?
+    state: 'off',    // off (no Web Locks) | starting | editing | paused | taking | syncing
+    id: Math.random().toString(36).slice(2),
+    chan: null, token: 0, current: 0, release: null, waiting: null,
+    slowTimer: null, payload: null, payloadTimer: null, payloadWaiter: null,
+    gen: 0, blocked: false, everEdited: false, waitedAtStart: false, ready: null, lastSync: null, saveFailed: false,
+    cancelled: new Set(), asideTimer: null,
+  };
+  const genOf = (a) => (a && Number.isInteger(a.gen) ? a.gen : 0);
+  // The newer of two saved copies: higher generation wins; on a tie the copy that was
+  // sent by message (the editor's final state) wins over storage.
+  const newest = (stored, sent) => (!sent ? stored : !stored ? sent : genOf(sent) >= genOf(stored) ? sent : stored);
+  function lockRequest(opts, onAnswer) {
+    const token = ++tab.token;
+    let answered = false;
+    navigator.locks.request(LOCK, opts, (lock) => {
+      answered = true;
+      if (onAnswer) onAnswer(!!lock);
+      if (!lock) return null;
+      return new Promise((release) => { tab.current = token; tab.release = release; onLockGained(); });
+    }).catch(() => {
+      if (tab.current === token) onLockLost(); // nothing in this app steals, but never edit without the lock
+      else if (!answered && !opts.signal) noLocking(); // the browser refused Web Locks
+      // otherwise: our own queued wait was cancelled
+    });
+  }
+  // Web Locks only exist on secure addresses (https, localhost, 127.0.0.1). On a plain
+  // http network address every tab edits, as in 1.0; warn when a second tab appears.
+  function warnNoLocking() {
+    if (!('BroadcastChannel' in window)) return;
+    const ch = new BroadcastChannel('pindou-nolock');
+    const warn = () => toast("Pindou Studio is open in more than one tab, and at this address it can't stop them overwriting each other's autosave. Keep to one tab, or open it at 127.0.0.1 / localhost or over https.", { sticky: true });
+    let warned = false;
+    ch.onmessage = (e) => { if (e.data === 'hello') ch.postMessage('here'); if (!warned) { warned = true; warn(); } };
+    ch.postMessage('hello');
+  }
+  function noLocking() { warnNoLocking(); tab.state = 'off'; tab.editing = true; hideTabNotice(); if (tab.ready) tab.ready(); }
+  function waitForLock() {
+    if (tab.waiting || document.visibilityState !== 'visible') return;
+    tab.waiting = new AbortController();
+    lockRequest({ signal: tab.waiting.signal });
+  }
+  function stopWaiting() { if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; } }
+  // Step out of the queue for a while (or until the next editor shows up).
+  function stepAside(ms) {
+    stopWaiting();
+    clearTimeout(tab.asideTimer);
+    tab.asideTimer = setTimeout(() => { if (tab.state === 'paused') waitForLock(); }, ms || 2000);
+  }
+  function post(msg) { if (tab.chan) tab.chan.postMessage({ ...msg, from: tab.id }); }
+  function saveNow() {
+    if (tab.state !== 'editing' && tab.state !== 'off') return null;
+    const project = { ...serialize(), gen: tab.gen };
+    if (store.set('pindou.autosave', project)) {
+      dirty = false;
+      if (tab.saveFailed) { tab.saveFailed = false; toast('Autosave is working again.'); }
+    } else if (!tab.saveFailed) {
+      tab.saveFailed = true;
+      toast("This browser won't let Pindou Studio autosave (storage is full or blocked). Use Save to keep a copy of your design.", { sticky: true });
+    }
+    return project;
+  }
+  // Stop whatever this tab is in the middle of, without applying it.
+  function stopInteraction() {
+    if (S.stroke) cancelStroke();
+    for (const id of pointers.keys()) { try { viewport.releasePointerCapture(id); } catch { /* already released */ } }
+    pointers.clear(); gesture = null; viewport.classList.remove('panning');
+    $$('dialog[open]').forEach((d) => { if (d.id !== 'tabDialog') d.close('cancel'); });
+    if (!$('#exportMenu').hidden) closeMenu(false);
+    clearTimeout(saveTimer);
+  }
+  function onLockGained() {
+    stopWaiting();
+    clearTimeout(tab.slowTimer); clearTimeout(tab.payloadTimer); tab.payloadWaiter = null;
+    const was = tab.state, token = tab.current;
+    if (was === 'starting' && !tab.waitedAtStart) { becomeEditor(store.get('pindou.autosave', null), true, 'storage'); return; }
+    // Taking over: use the newest design, waiting a moment for the one the other tab
+    // sent (it was sent before the lock was let go, but travels separately).
+    tab.state = 'syncing';
+    const finish = () => {
+      if (tab.current !== token || tab.state !== 'syncing') return;
+      clearTimeout(tab.payloadTimer); tab.payloadWaiter = null;
+      const sent = tab.payload, latest = newest(store.get('pindou.autosave', null), sent);
+      tab.payload = null;
+      becomeEditor(latest, was === 'starting', latest && latest === sent ? 'message' : 'storage');
+      hideTabNotice();
+    };
+    if (tab.payload) finish();
+    else { tab.payloadWaiter = finish; tab.payloadTimer = setTimeout(finish, PAYLOAD_WAIT); }
+  }
+  function becomeEditor(latest, quiet, source) {
+    tab.state = 'editing'; tab.editing = true; tab.lastSync = source; tab.everEdited = true;
+    // "My collection" may have changed in the other tab too
+    S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
+    tab.gen = Math.max(store.get(GEN_KEY, 0) || 0, genOf(latest)) + 1;
+    store.set(GEN_KEY, tab.gen);
+    takeLatest(latest, quiet);
+    refreshPanels();
+    post({ type: 'editing' });
+    if (tab.ready) tab.ready();
+  }
+  // Another tab asked to take over: stop, save, send the design, let go.
+  function handOver(m) {
+    if (tab.state !== 'editing' || !tab.release) return;
+    stopInteraction();
+    const project = saveNow();
+    post({ type: 'handover', to: m.from, project });
+    tab.current = 0; tab.state = 'paused'; tab.editing = false;
+    if (tab.saveFailed) { tab.saveFailed = false; hideToast(); }
+    const release = tab.release; tab.release = null; release();
+    showTabNotice();
+    waitForLock();
+  }
+  function onLockLost() {
+    tab.current = 0; tab.release = null;
+    clearTimeout(tab.payloadTimer); tab.payloadWaiter = null;
+    stopInteraction();
+    tab.state = 'paused'; tab.editing = false;
+    showTabNotice();
+    waitForLock();
+  }
+  function requestTakeover() {
+    if (tab.state !== 'paused') return;
+    tab.state = 'taking';
+    $('#tabTake').setAttribute('aria-disabled', 'true');
+    $('#tabTakeLabel').textContent = 'Taking over…';
+    clearTimeout(tab.asideTimer);
+    if (!tab.waiting) { tab.waiting = new AbortController(); lockRequest({ signal: tab.waiting.signal }); }
+    post({ type: 'request' });
+    armSlowTimer();
+  }
+  // The editing tab hasn't answered: say why this tab is still waiting.
+  function armSlowTimer() {
+    clearTimeout(tab.slowTimer);
+    tab.slowTimer = setTimeout(() => {
+      if (tab.state !== 'taking') return;
+      $('#tabText').textContent = "The other tab isn't answering. It may have a dialog open (such as Print), or it may be busy or asleep in the background. Switch to it and close the dialog, or close that tab, and this one takes over with what was saved there.";
+      $('#tabTakeLabel').textContent = 'Waiting for the other tab…';
+    }, SLOW_ANSWER);
+  }
+  function onMessage(e) {
+    const m = e.data;
+    if (!m || m.from === tab.id) return;
+    if ((m.type === 'handover' || m.type === 'closing') && m.project) {
+      if (tab.state === 'editing') return;
+      tab.payload = newest(tab.payload, m.project);
+      if (tab.payloadWaiter) tab.payloadWaiter();
+      // After a hand-over, waiting tabs line up again (if the tab that asked has gone,
+      // one of them carries on). When the editor closes, they wait a moment first, so
+      // a reload of the editing tab gets editing back.
+      if (tab.state === 'paused') { if (m.type === 'handover') waitForLock(); else stepAside(1500); }
+    } else if (m.type === 'request') {
+      // Let a "cancel" that's already queued behind this request win (the asker went
+      // back to the editing tab, e.g. after it had been frozen in the background).
+      if (tab.state === 'editing') { tab.cancelled.delete(m.from); setTimeout(() => { if (!tab.cancelled.has(m.from)) handOver(m); }, 0); }
+      else if (tab.state === 'paused') stepAside(); // let the tab that asked be next
+    } else if (m.type === 'cancel') {
+      tab.cancelled.add(m.from);
+      if (tab.state === 'paused') waitForLock();
+    } else if (m.type === 'editing') {
+      // A new editor: older copies are out of date; paused tabs line up again, and a
+      // tab that was asking asks the new editor instead.
+      if (tab.state === 'paused' || tab.state === 'taking') tab.payload = null;
+      if (tab.state === 'paused') { clearTimeout(tab.asideTimer); waitForLock(); }
+      if (tab.state === 'taking') { post({ type: 'request' }); armSlowTimer(); }
+    }
+  }
+  // Use a saved design if it differs from what this tab shows. One undo step, so Undo
+  // goes back to what this tab had before (except at start-up: no undo step).
+  function takeLatest(saved, quiet) {
+    let msg = 'Editing in this tab now.';
+    if (saved) {
+      try {
+        const { gen, savedAt, ...project } = saved;
+        if (JSON.stringify(project) !== JSON.stringify(serialize())) {
+          const { state, name } = parseProject(project);
+          S.focus = null;
+          if (quiet) { applyState({ ...state, name }); S.name = name; requestDraw(); }
+          else replaceState({ ...state, name });
+          S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
+          msg = "Editing in this tab now, with the other tab's latest work. Undo goes back to what this tab had.";
+        }
+      } catch { /* unreadable: keep what this tab has */ }
+    }
+    if (!quiet) toast(msg);
+  }
+  function showTabNotice() {
+    tab.blocked = true;
+    $('#tabText').textContent = tab.everEdited
+      ? 'Editing moved to another tab, so this one is paused. That tab has everything from here.'
+      : 'Pindou Studio is already open in another tab or window.';
+    $('#tabTake').removeAttribute('aria-disabled');
+    $('#tabTakeLabel').textContent = 'Edit here instead';
+    const d = $('#tabDialog');
+    if (!d.open) showDialog(d);
+    $('#tabTake').focus();
+  }
+  function hideTabNotice() {
+    tab.blocked = false;
+    const d = $('#tabDialog');
+    if (!d.open) return;
+    d.close();
+    // the control that had focus before may be hidden in this layout now
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (a && a !== document.body && a.getClientRects().length) return;
+      const to = ['#moreBtn', '[data-action=save]', '.tool[aria-pressed="true"]'].map((s) => $(s)).find((el) => el && el.getClientRects().length);
+      if (to) to.focus();
+    });
+  }
+  function initTabLock() {
+    if (!(navigator.locks && navigator.locks.request)) { warnNoLocking(); return Promise.resolve(); }
+    tab.state = 'starting'; tab.editing = false;
+    if ('BroadcastChannel' in window) { tab.chan = new BroadcastChannel('pindou'); tab.chan.onmessage = onMessage; }
+    const d = $('#tabDialog');
+    d.addEventListener('cancel', (e) => e.preventDefault());
+    // Browsers let repeated Escape presses close a modal anyway: put it straight back.
+    d.addEventListener('close', () => { if (tab.blocked) setTimeout(() => { if (tab.blocked && !d.open) showDialog(d); }, 0); });
+    $('#tabTake').addEventListener('click', () => { if ($('#tabTake').getAttribute('aria-disabled') !== 'true') requestTakeover(); });
+    document.addEventListener('visibilitychange', () => {
+      if (tab.state === 'taking' && document.visibilityState === 'hidden') {
+        // Asked, then left (perhaps to the editing tab itself): never mind.
+        stopWaiting(); clearTimeout(tab.slowTimer);
+        tab.state = 'paused';
+        post({ type: 'cancel' });
+        showTabNotice();
+        return;
+      }
+      const waits = tab.state === 'paused' || (tab.state === 'starting' && tab.waitedAtStart);
+      if (!waits) return;
+      if (document.visibilityState === 'visible') waitForLock(); else stopWaiting();
+    });
+    // The editing tab always saves when it's hidden or closed, even without changes,
+    // and sends its design to whoever takes over next.
+    window.addEventListener('pagehide', () => { if (tab.state === 'editing') { const project = saveNow(); if (project) post({ type: 'closing', project }); } });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && tab.state === 'editing') saveNow(); });
+    return new Promise((ready) => {
+      tab.ready = () => { tab.ready = null; ready(); };
+      lockRequest({ ifAvailable: true }, (got) => {
+        if (got) return; // onLockGained finishes start-up
+        // On a reload the old page may not have let go yet: wait a moment before
+        // showing the notice, and take over quietly if the lock frees up meanwhile.
+        tab.waitedAtStart = true;
+        waitForLock();
+        setTimeout(() => {
+          if (tab.state !== 'starting') { if (tab.state !== 'syncing' && tab.ready) tab.ready(); return; }
+          tab.state = 'paused';
+          showTabNotice();
+          if (tab.ready) tab.ready();
+        }, 500);
+      });
+    });
   }
 
   // ---------- rendering for export / print ----------
@@ -934,7 +1329,8 @@
     const rows = Math.ceil(list.length / cols);
     const head = 56;
     const out = document.createElement('canvas');
-    out.width = Math.max(pattern.width, 480); out.height = head + pattern.height + 30 + rows * rowH + 20;
+    const foot = 28;
+    out.width = Math.max(pattern.width, 480); out.height = head + pattern.height + 30 + rows * rowH + 20 + foot;
     const g = out.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, out.width, out.height);
     g.fillStyle = '#111'; g.font = '700 20px system-ui, sans-serif'; g.textBaseline = 'top';
@@ -951,6 +1347,8 @@
       g.strokeStyle = '#999'; g.strokeRect(x + 0.5, y + 0.5, 17, 17);
       g.fillStyle = '#111'; g.fillText(`${c.code}  × ${fmt(n)}`, x + 26, y + 9);
     });
+    g.font = '12px system-ui, sans-serif'; g.fillStyle = '#666'; g.textBaseline = 'bottom';
+    g.fillText(CREDIT, 12, out.height - 10);
     out.toBlob((b) => download(safeName(S.name) + '.png', b), 'image/png');
   }
 
@@ -968,6 +1366,7 @@
 
   function printTrays() {
     buildPrintSheets();
+    saveBeforeDialog();
     window.print();
   }
   // Sheets are canvases (drawn synchronously), so they are ready even when the
@@ -980,7 +1379,7 @@
     const legendHtml = (list) => list.map(({ c, n }) => `<div><span class="chip" style="background:${c.transparent ? 'rgb(226,236,246)' : c.hex}"></span><b>${c.code}</b> × ${fmt(n)}</div>`).join('');
     const addSheet = (title, sub, canvasEl, list) => {
       const sec = document.createElement('section'); sec.className = 'sheet';
-      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(title)}</h2><div class="sheet-sub">${escapeHtml(sub)}</div></div>`;
+      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(title)}</h2><div class="sheet-sub">${escapeHtml(sub)}</div><div class="sheet-credit">${escapeHtml(CREDIT)}</div></div>`;
       canvasEl.className = 'sheet-img';
       sec.appendChild(canvasEl);
       const lg = document.createElement('div'); lg.className = 'legend'; lg.innerHTML = legendHtml(list);
@@ -1249,22 +1648,55 @@
     clearTimeout(imgState.timer); imgState.timer = null;
     clearTimeout(imgState.stepTimer); imgState.stepTimer = null;
     imgState.job = null;
+    hideBusy();
+  }
+  // Progress card over the preview. Only appears once a conversion has run for a
+  // moment, so quick conversions don't flash it. The time estimate comes from this
+  // pass's own rate, and waits until there's enough of it to be meaningful.
+  const BUSY_DELAY = 400;
+  function showBusy(pass, progress, passMs) {
+    const pct = Math.min(99, Math.floor(progress * 100));
+    $('#imgPreviewBox').classList.add('busy');
+    $('#imgPreviewBox').setAttribute('aria-busy', 'true');
+    $('#imgBusy').hidden = false;
+    $('#imgBusyLabel').textContent = pass > 1 ? 'Reducing colors…' : 'Converting…';
+    $('#imgBusyPct').textContent = pct + '%';
+    $('#imgProgress').value = pct;
+    let eta = '';
+    if (passMs > 1500 && progress > 0.03) {
+      const left = (passMs * (1 - progress)) / progress / 1000;
+      eta = left < 5 ? 'Almost done' : left < 60 ? `About ${Math.ceil(left / 5) * 5} s left` : `About ${Math.round(left / 60)} min left`;
+      if (pass > 1) eta += ' in this step';
+    } else if (passMs > 1500) eta = 'Working out how long this will take…';
+    if (imgState.applyWhenDone) eta += (eta ? ' · ' : '') + 'the pattern will be used when this finishes';
+    $('#imgBusyEta').textContent = eta;
+  }
+  function hideBusy() {
+    $('#imgPreviewBox').classList.remove('busy');
+    $('#imgPreviewBox').removeAttribute('aria-busy');
+    $('#imgBusy').hidden = true;
   }
   // Is a newer conversion still waiting or running? Then the shown result is stale.
   const convertPending = () => !!(imgState.timer || imgState.job);
   // Convert in ~20 ms slices so the page stays responsive; a newer request cancels this one.
   function startConvert() {
+    const wasBusy = !$('#imgBusy').hidden; // a newer setting replaced a long run: keep the card up
     cancelConvert();
     if (!imgState.img) return;
     const job = convertJob(convertOpts());
     imgState.job = job;
+    const started = performance.now();
+    let curPass = 1, passStart = started;
     const step = () => {
       if (imgState.job !== job) return;
       jobDeadline = performance.now() + 20;
       let r;
       try { r = job.next(); } finally { jobDeadline = Infinity; }
-      if (r.done) { imgState.job = null; showConversion(r.value); return; }
+      if (r.done) { imgState.job = null; hideBusy(); showConversion(r.value); return; }
       const { pass, progress } = r.value;
+      const now = performance.now();
+      if (pass !== curPass) { curPass = pass; passStart = now; }
+      if (wasBusy || now - started > BUSY_DELAY) showBusy(pass, progress, now - passStart);
       $('#imgStats').textContent = `Converting… ${Math.round(progress * 100)}%${pass > 1 ? ' (reducing colors)' : ''}${imgState.applyWhenDone ? ' · will use the pattern when done' : ''}`;
       imgState.stepTimer = setTimeout(step, 0);
     };
@@ -1368,6 +1800,99 @@
     });
     $$('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
+    // ⋯ menu (compact layouts): closes after an action, on a click outside, or Escape
+    $('#moreBtn').addEventListener('click', () => setMore(!$('#fileActions').classList.contains('open'), true));
+    // (Capture phase: runs before the action, so a dialog it opens returns focus to ⋯.)
+    document.addEventListener('click', (e) => {
+      if (!$('#fileActions').classList.contains('open') || e.target.closest('#moreBtn')) return;
+      const b = e.target.closest('#fileActions button, #fileActions a');
+      if (b && b.dataset.action === 'toggle-export') return; // opens its submenu inside the menu
+      if (b) setMore(false, $('#fileActions').contains(document.activeElement));
+      else if (!e.target.closest('#fileActions')) setMore(false, false);
+    }, true);
+    $('#fileActions').addEventListener('focusout', (e) => {
+      const to = e.relatedTarget;
+      if (to && !$('#fileActions').contains(to) && to !== $('#moreBtn')) setMore(false, false);
+    });
+    // bottom sheet (phone layouts)
+    $('#sheetToggle').addEventListener('click', () => setSheet(!$('#sidebar').classList.contains('expanded')));
+    $('#quickColors').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-q]');
+      if (!b) return;
+      if (b.dataset.q === 'current') { if (sheetMode()) setSheet(!$('#sidebar').classList.contains('expanded')); }
+      else pickColor(+b.dataset.q);
+    });
+    $('#quickColors').addEventListener('keydown', (e) => {
+      const items = $$('#quickColors button');
+      const k = items.indexOf(document.activeElement);
+      if (k < 0) return;
+      const to = { ArrowRight: k + 1, ArrowLeft: k - 1, Home: 0, End: items.length - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault();
+      const b = items[clamp(to, 0, items.length - 1)];
+      items.forEach((x) => { x.tabIndex = x === b ? 0 : -1; });
+      b.focus();
+    });
+    // Short screens (phones in landscape, flip-phone cover screens) can't spare a row
+    // for the view settings, so they move into the ⋯ menu; the same elements, so their
+    // listeners come along.
+    const shortMQ = matchMedia('(max-height: 520px)');
+    const placeStageBar = () => {
+      const bar = $('.stage-bar'), fa = $('#fileActions');
+      const focused = bar.contains(document.activeElement) ? document.activeElement : null;
+      if (shortMQ.matches) { if (bar.parentElement !== fa) fa.insertBefore(bar, fa.querySelector('.repo-sep')); }
+      else if (bar.parentElement !== $('.stage')) { $('.stage').insertBefore(bar, viewport); setMore(false); }
+      if (focused && document.activeElement !== focused) (focused.offsetParent ? focused : $('#moreBtn')).focus();
+    };
+    shortMQ.addEventListener('change', placeStageBar);
+    placeStageBar();
+    // Compact layouts put the swatches right under the palette/search row, so colors
+    // come first and the screen order matches the Tab order (the elements move, as
+    // with the stage bar; desktop keeps its order).
+    const swatchesFirstMQ = matchMedia('(max-width: 599.98px), (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+    const placeSwatches = () => {
+      const sw = $('#swatches'), hint = $('#ownedHint'), panel = $('[data-panel=palette]');
+      const focused = sw.contains(document.activeElement) ? document.activeElement : null;
+      if (swatchesFirstMQ.matches) {
+        const after = panel.querySelector('.row'); // palette + search
+        if (after.nextElementSibling !== hint) { after.after(hint, sw); }
+      } else if ($('#swatchesHome').previousElementSibling !== sw) {
+        $('#swatchesHome').before(hint, sw);
+      }
+      sw.classList.toggle('near-top', swatchesFirstMQ.matches);
+      if (focused && document.activeElement !== focused) focused.focus();
+    };
+    placeSwatches();
+    // Focus that a layout change hid (rotating, folding, resizing) moves to the
+    // control that does the same job in the new layout. The browser may already have
+    // dropped focus when the element was hidden, so go by the element that had it,
+    // unless the user had deliberately moved focus away (blurred a visible element).
+    let lastFocused = null;
+    document.addEventListener('focusin', (e) => { lastFocused = e.target; });
+    document.addEventListener('focusout', (e) => { if (!e.relatedTarget && e.target.getClientRects().length && document.hasFocus()) lastFocused = null; });
+    function keepFocusVisible() {
+      const a = document.activeElement;
+      const f = a && a !== document.body ? a : lastFocused;
+      if (!f || !document.contains(f) || f.getClientRects().length) return;
+      let to = null;
+      const sb = $('#sidebar');
+      if (sheetMode() && !sb.classList.contains('expanded') && sb.contains(f) && !$('.sheet-bar').contains(f)) to = $('#sheetToggle');
+      else if (f.closest('#quickColors')) to = $('#quickColors [data-q=current]').getClientRects().length ? $('#quickColors [data-q=current]') : ($('#swatches .sw[aria-pressed="true"]') || $('#swatches .sw'));
+      else if (f === $('#sheetToggle')) to = $('#quickColors [data-q=current]').getClientRects().length ? $('#quickColors [data-q=current]') : $('.tabs [aria-selected="true"]');
+      else if (f === $('#moreBtn') || f.closest('#fileActions')) to = $('[data-action=save]').getClientRects().length ? $('[data-action=save]') : $('#moreBtn');
+      else if (f.matches('[data-action=zoom-in], [data-action=zoom-out]')) to = $('[data-action=zoom-fit]');
+      if (to && to.getClientRects().length) to.focus();
+    }
+    const compactMQ = matchMedia('(max-width: 799.98px), (max-height: 520px)');
+    const onLayoutChange = () => {
+      if (!compactMQ.matches) setMore(false); // a layout without ⋯ closes it, so it doesn't linger unseen
+      placeSwatches();
+      requestAnimationFrame(keepFocusVisible);
+    };
+    [phoneMQ, foldedMQ, shortMQ, compactMQ, swatchesFirstMQ, matchMedia('(max-width: 379.98px)')].forEach((mq) => mq.addEventListener('change', onLayoutChange));
+    // The folded-phone layout needs the top bar's height.
+    new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', $('.topbar').offsetHeight + 'px')).observe($('.topbar'));
+
     $('#toastClose').addEventListener('click', hideToast);
     const menuBox = $('.menu');
     menuBox.addEventListener('focusout', (e) => { if (!menuBox.contains(e.relatedTarget)) closeMenu(); });
@@ -1380,13 +1905,18 @@
     $$('dialog').forEach((dlg) => dlg.addEventListener('close', () => {
       if ($('#toast').parentElement === dlg) moveToast(document.body);
     }));
-    $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; dirty = true; autosave(); });
+    $('#projectName').addEventListener('input', (e) => {
+      if (!tab.editing) { e.target.value = S.name; return; }
+      S.name = e.target.value; dirty = true; autosave();
+    });
 
     $('#traySize').addEventListener('change', (e) => {
       if (e.target.value === 'custom') {
+        saveBeforeDialog();
         const v = parseInt(prompt('Pegs per side for one tray (5–300):', String(S.tray)), 10);
-        if (v >= 5 && v <= 300) setTraySize(v); else e.target.value = String(S.tray);
-      } else setTraySize(+e.target.value);
+        if (v >= 5 && v <= 300 && tab.editing) setTraySize(v); else e.target.value = String(S.tray);
+      } else if (tab.editing) setTraySize(+e.target.value);
+      else e.target.value = String(S.tray);
     });
     $('#guides').addEventListener('change', (e) => { S.guides = +e.target.value; savePrefs(); requestDraw(); });
     $('#showCodes').addEventListener('change', (e) => { S.showCodes = e.target.checked; savePrefs(); requestDraw(); });
@@ -1434,8 +1964,13 @@
         b.setAttribute('aria-pressed', String(S.owned.has(c.code)));
         b.setAttribute('aria-label', `${c.code}, ${S.owned.has(c.code) ? 'in my collection' : 'not in my collection'}`);
       } else {
-        selectColor(c.i);
-        if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
+        pickColor(c.i);
+        // Phones: picking from the full palette closes the sheet so the canvas is back;
+        // the color stays in the quick row, which keeps the focus.
+        if (sheetMode() && $('#sidebar').classList.contains('expanded')) {
+          setSheet(false);
+          $('#quickColors [data-q=current]').focus();
+        }
       }
     });
 
@@ -1548,7 +2083,12 @@
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
+      if (e.key === 'Escape' && $('#fileActions').classList.contains('open')) { e.preventDefault(); setMore(false, true); return; }
+      if (e.key === 'Escape' && sheetMode() && $('#sidebar').classList.contains('expanded') && !e.target.closest('dialog, input:not([type=checkbox]), textarea, select')) {
+        e.preventDefault(); setSheet(false); $('#sheetToggle').focus(); return;
+      }
       // Ctrl+S saves the project from anywhere, including while typing its name.
+      if (!tab.editing) { if ((e.ctrlKey || e.metaKey) && k === 's') e.preventDefault(); return; } // another tab is editing
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
       if (e.target.closest('dialog')) return;
       // Text fields keep their own undo; dropdowns and checkboxes don't have one.
@@ -1577,7 +2117,11 @@
 
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
-    window.addEventListener('beforeprint', () => { if (!$('#printRoot').children.length) buildPrintSheets(); });
+    window.addEventListener('beforeprint', () => {
+      saveBeforeDialog();
+      if (!tab.editing) { $('#printRoot').innerHTML = '<section class="sheet"><div class="sheet-head"><h2>Print from the tab you are editing in</h2><div class="sheet-sub">This tab is paused, so its copy of the design may be out of date.</div></div></section>'; return; }
+      if (!$('#printRoot').children.length) buildPrintSheets();
+    });
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
     // Write the autosave right away when the tab is hidden or closed, not 0.4 s later.
     window.addEventListener('pagehide', flushAutosave);
@@ -1637,10 +2181,13 @@
     updateUndoButtons();
     booted = true;
     $('#status').textContent = `Pindou Studio v${VERSION}`;
+    $('#menuVersion').textContent = `Pindou Studio v${VERSION}`;
     checkVersion();
+    tabReady = initTabLock();
   }
+  let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, get tabReady() { return tabReady; } };
   boot();
 })();

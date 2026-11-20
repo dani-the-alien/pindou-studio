@@ -94,6 +94,9 @@ input[type=number] { width: 80px; }
 .project-name:hover { border-bottom-style: solid !important; }
 .project-name:focus { border: 1px solid var(--field) !important; border-radius: 8px !important; }
 .top-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.repo-link { color: var(--muted); font-size: 13px; text-decoration: none; padding: 6px 4px; border-radius: 6px; }
+.repo-link:hover { color: var(--text); text-decoration: underline; }
+.repo-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
 .menu { position: relative; }
 .menu-pop {
@@ -216,6 +219,23 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .import-controls { flex: 1 1 280px; display: flex; flex-direction: column; gap: 8px; }
 .import-preview { flex: 1 1 320px; display: flex; align-items: center; justify-content: center; background: var(--panel-2); border-radius: 10px; min-height: 240px; padding: 8px; }
 .import-preview canvas { max-width: 100%; max-height: 60vh; image-rendering: pixelated; }
+.import-preview { position: relative; }
+.import-preview.busy canvas { opacity: 0.35; }
+.img-busy {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(280px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); font-size: 13px;
+}
+.img-busy[hidden] { display: none; }
+/* small screens: the preview may be scrolled out of view, so the card is pinned to the
+   top of the screen instead (nothing scrolls, so a field being typed in stays put) */
+@media (max-width: 799.98px), (max-height: 520px) {
+  .img-busy { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 5; }
+}
+.img-busy-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+.img-busy progress { width: 100%; height: 10px; accent-color: var(--accent); }
+.img-busy-eta { color: var(--muted); font-size: 12px; min-height: 1.3em; }
 .tray-picker { display: flex; flex-direction: column; gap: 4px; }
 .tp-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
 #trayPicker { width: 220px; height: 220px; border-radius: 8px; cursor: pointer; touch-action: none; }
@@ -234,19 +254,227 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 .print-root { display: none; }
 
-/* Narrow screens: sidebar moves under the canvas */
-@media (max-width: 860px) {
-  .toast { inset: calc(env(safe-area-inset-top, 0px) + 8px) auto auto 50%; }
-  body { overflow: auto; }
+/* ---------- Layouts for different screens ----------
+   wide (default)        toolbar left, canvas, sidebar right
+   medium (< 1100 wide)  same, narrower sidebar (tablet landscape, big foldables open)
+   tall tablet           portrait and >= 600 wide: panels docked under the canvas
+   phone (< 600 wide)    tools along the bottom; the sidebar becomes a bottom sheet
+                         with a quick-color row that is always visible
+   short (<= 520 high)   phones in landscape, flip-phone cover screens: slim chrome,
+                         view settings in the ⋯ menu
+   folded                a foldable bent at its hinge: canvas on one half, controls
+                         on the other (Viewport Segments)
+   The top bar folds its file actions into a ⋯ menu when it's narrower than 800 px
+   (where they no longer fit on one row) or the screen is short. */
+
+body { height: 100vh; height: 100dvh; }
+.topbar { padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+.file-actions { display: contents; }
+.more-btn, .menu-version, .sheet-bar { display: none; }
+.row { flex-wrap: wrap; }
+.row > select, .row label > select { min-width: 0; max-width: 100%; }
+label.inline { min-width: 0; }
+
+@media (pointer: coarse) {
+  .top-actions button, .stage-bar select, .zoom button { min-height: 40px; }
+  .tool { min-height: 48px; }
+  .sw { height: 44px; }
+  .seg button { padding: 8px 10px; }
+  .tabs button { padding: 12px 10px; }
+}
+
+@media (max-width: 1099.98px) {
+  .sidebar { width: clamp(240px, 30vw, 310px); }
+  .toolbar { width: 64px; }
+  .tool { width: 54px; }
+  /* the stage settings stay on one row and scroll sideways instead of wrapping */
+  .stage-bar { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; gap: 10px; }
+  .stage-bar .grow { display: none; }
+}
+
+/* ⋯ menu */
+@media (max-width: 799.98px), (max-height: 520px) {
+  .topbar { flex-wrap: nowrap; gap: 8px; padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 6px; }
+  .brand { flex: 1; min-width: 0; }
+  .project-name { width: 100%; max-width: none; min-width: 0; }
+  .top-actions { flex-wrap: nowrap; position: relative; }
+  .more-btn { display: inline-block; font-size: 18px; line-height: 1; padding: 6px 12px; }
+  .file-actions {
+    display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+    flex-direction: column; align-items: stretch; gap: 2px; padding: 6px; min-width: 220px;
+    max-height: calc(100vh - var(--top-h, 48px) - 12px); max-height: calc(100dvh - var(--top-h, 48px) - 12px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  }
+  .file-actions.open { display: flex; }
+  .file-actions .stage-bar {
+    flex-direction: column; align-items: stretch; flex-wrap: nowrap; overflow: visible; white-space: normal;
+    gap: 6px; padding: 8px 12px; margin-top: 4px; border: 0; border-top: 1px solid var(--line); background: transparent;
+  }
+  .file-actions .stage-bar label { justify-content: space-between; }
+  .file-actions .stage-bar #sizeInfo { white-space: normal; font-size: 12px; }
+  .file-actions > button, .file-actions .menu > button, .file-actions .repo-link { text-align: left; border-color: transparent; background: transparent; padding: 10px 12px; }
+  .file-actions .menu-pop { position: static; box-shadow: none; border: 0; padding: 0 0 0 12px; min-width: 0; }
+  .file-actions .repo-sep { display: block; width: auto; height: 1px; margin: 4px 0; order: 0; }
+  .file-actions .repo-link { order: 0; font-size: 14px; color: var(--text); }
+  .menu-version { display: block; font-size: 12px; color: var(--muted); padding: 4px 12px 2px; }
+  .edit-sep { display: none; }
+  .stage-bar { padding: 4px 10px; }
+}
+
+/* Tall tablets (iPad and similar in portrait): toolbar left, panels docked under the canvas */
+@media (min-width: 600px) and (max-width: 1099.98px) and (max-aspect-ratio: 5/6) {
+  .workspace { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr minmax(240px, 38%); }
+  .toolbar { grid-row: 1 / 3; }
+  .stage { grid-column: 2; grid-row: 1; min-height: 0; }
+  .sidebar { grid-column: 2; grid-row: 2; width: auto; border-left: 0; border-top: 1px solid var(--line); min-height: 0; }
+}
+
+/* Phones (portrait, flip phones, foldable cover screens) */
+@media (max-width: 599.98px) {
+  /* messages sit just above the controls at the bottom, clear of undo and ⋯ */
+  .toast { inset: auto auto min(calc(var(--below-canvas, 120px) + 8px), calc(100% - 90px)) 50%; }
   .workspace { flex-direction: column; }
-  .toolbar { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; padding: 4px 8px; }
-  .tool { width: 52px; }
-  .current { margin: 0 6px; flex-direction: row; }
+  .stage { flex: 1; min-height: 0; order: 0; }
+  .status { display: none; }
+  .sidebar { order: 1; width: auto; flex: none; border-left: 0; border-top: 1px solid var(--line); }
+  .sidebar:not(.expanded) .tabs, .sidebar:not(.expanded) .panel { display: none; }
+  .sidebar.expanded { height: 55%; }
+  /* in the sheet, colors come first; the palette controls follow below them */
+  .sheet-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 52px; }
+  .toolbar {
+    order: 2; width: auto; flex: none; flex-direction: row; align-items: center; gap: 2px;
+    border-right: 0; border-top: 1px solid var(--line); overflow-x: auto; overflow-y: hidden;
+    padding: 4px max(6px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+  .tool { width: auto; min-width: 48px; flex: 1 0 48px; }
+  .toolbar .current { display: none; }
+  .zoom { margin: 0 0 0 4px; flex-direction: row; }
+  .zoom button { width: 40px; }
+}
+/* pinch (or the mouse wheel) zooms, so only Fit stays */
+@media (max-width: 599.98px), (max-height: 520px) and (pointer: coarse) {
+  .zoom [data-action=zoom-in], .zoom [data-action=zoom-out] { display: none; }
+}
+/* very narrow phones (old small phones, some foldable cover screens) */
+@media (max-width: 379.98px) {
+  .tool { min-width: 36px; flex: 1 1 36px; padding: 6px 0; }
+  .tool span { display: none; }
+  .toolbar { gap: 0; }
+  .zoom button { width: 36px; }
+}
+/* swatches moved up under the search row (compact layouts): a gap before the other controls */
+.swatches.near-top { margin-bottom: 10px; }
+/* the quick-color row */
+.quick { flex: 1; display: flex; gap: 6px; overflow-x: auto; align-items: center; scrollbar-width: none; min-width: 0; padding: 2px; }
+.quick::-webkit-scrollbar { display: none; }
+@media (pointer: fine) { .quick { scrollbar-width: thin; } .quick::-webkit-scrollbar { display: block; height: 6px; } }
+.quick .sw { flex: none; width: 40px; height: 40px; border-radius: 9px; }
+.quick .sw.current { width: 48px; height: 48px; outline: 3px solid var(--accent); outline-offset: 1px; margin-right: 6px; }
+.quick .sw[aria-pressed="true"]:not(.current) { outline-width: 2px; }
+.quick .quick-sep { flex: none; width: 1px; height: 32px; background: var(--line); }
+.sheet-toggle { flex: none; width: 44px; height: 44px; font-size: 18px; padding: 0; }
+.sidebar.expanded .sheet-toggle { transform: rotate(180deg); }
+
+/* Short screens: phones in landscape, small cover screens */
+@media (max-height: 520px) {
+  .topbar { padding-top: max(4px, env(safe-area-inset-top)); padding-bottom: 4px; }
+  .status { display: none; }
+  .tool span { display: none; }
+  .tool { min-height: 40px; padding: 4px 2px; }
+}
+/* phones in landscape and other low screens: the toolbar becomes two columns so everything fits */
+@media (max-height: 600px) and (min-width: 600px) {
+  .sidebar { width: clamp(220px, 32vw, 300px); }
+  .tabs button { padding: 6px; }
+  .toolbar { display: grid; grid-template-columns: repeat(2, 42px); justify-content: center; align-content: start; gap: 4px; width: auto; padding: 6px; }
+  .tool { width: 42px; min-width: 0; min-height: 40px; }
+  .current { grid-column: 1 / -1; flex-direction: row; justify-content: center; gap: 6px; margin: 2px 0; }
+  .swatch.big { width: 30px; height: 30px; border-radius: 8px; }
+  .zoom { grid-column: 1 / -1; flex-direction: row; justify-content: center; margin: 0; gap: 4px; }
+  .zoom button { width: 40px; }
+}
+@media (max-height: 600px) and (min-width: 600px) and (pointer: fine) {
+  .zoom button { width: 28px; padding: 4px 0; }
+}
+/* phones in landscape and folded foldables have no bottom sheet, but the quick row
+   and swatches-first order help just as much there */
+@media (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2) {
+  .toolbar .current { display: none; } /* the quick row shows it */
+  .sidebar .sheet-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; min-height: 0; border-bottom: 1px solid var(--line); }
+  .sidebar .sheet-toggle { display: none; }
+  .sidebar .quick .sw { width: 36px; height: 36px; }
+  .sidebar .quick .sw.current { width: 42px; height: 42px; }
+}
+/* tiny screens (flip-phone cover displays): everything slimmer, and the open sheet
+   takes the whole canvas area with the swatches first (picking closes it again) */
+@media (max-height: 520px) and (max-width: 599.98px) {
+  .sheet-bar { min-height: 44px; padding: 3px 6px; }
+  .quick .sw { width: 34px; height: 34px; }
+  .quick .sw.current { width: 40px; height: 40px; }
+  .sheet-toggle { width: 38px; height: 38px; }
+  .tool { min-width: 42px; flex-basis: 42px; min-height: 38px; }
+  .zoom button { width: 44px; }
+  .workspace.sheet-open .stage { display: none; }
+  .sidebar.expanded { flex: 1; height: auto; min-height: 0; }
+  .sidebar.expanded .tabs button { padding: 6px; }
+}
+
+@media (max-height: 520px) and (max-width: 379.98px) {
+  .tool { min-width: 34px; flex: 1 1 34px; }
+  .zoom button { width: 36px; }
+}
+
+/* Foldables bent at the hinge (Viewport Segments). Flip phone or foldable half-open
+   with the hinge across (one segment above the other): canvas on top, controls
+   below the hinge, tools in a row at the bottom. Book-style half-open (side by
+   side): canvas on the left half, panels on the right. */
+@media (vertical-viewport-segments: 2) {
+  .workspace { display: flex; flex-direction: column; }
+  .stage { flex: none; height: calc(env(viewport-segment-bottom 0 0) - var(--top-h, 48px)); order: 0; }
+  .sidebar, .sidebar.expanded {
+    order: 1; flex: 1; height: auto; min-height: 0; width: auto; border-left: 0; border-top: 1px solid var(--line);
+    margin-top: calc(env(viewport-segment-top 0 1) - env(viewport-segment-bottom 0 0));
+  }
+  /* the phone rules hide these while the sheet is collapsed; here they always show */
+  .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
+  .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
+  .sheet-toggle { display: none; }
+  /* messages go in the top half, above the hinge */
+  .toast { inset: auto auto calc(100% - env(viewport-segment-bottom 0 0) + 8px) 50%; }
+  .toolbar {
+    order: 2; display: flex; width: auto; flex: none; flex-direction: row; align-items: center; gap: 2px;
+    border-right: 0; border-top: 1px solid var(--line); overflow-x: auto; overflow-y: hidden;
+    padding: 4px max(8px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+  .tool { width: auto; min-width: 48px; flex: 1 0 48px; }
+  .tool span { display: none; }
+  .zoom { margin: 0 0 0 4px; flex-direction: row; }
+  .zoom button { width: 40px; }
+  .status { display: none; }
+}
+@media (vertical-viewport-segments: 2) and (min-width: 600px) {
+  .toolbar .current { display: flex; flex-direction: row; gap: 6px; margin: 0 8px; }
   .swatch.big { width: 32px; height: 32px; }
-  .zoom { margin: 0 0 0 auto; flex-direction: row; }
-  .stage { min-height: 62vh; }
-  .sidebar { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: none; }
-  .panel { max-height: 50vh; }
+}
+@media (horizontal-viewport-segments: 2) {
+  .workspace { display: flex; flex-direction: row; }
+  .sidebar {
+    width: calc(100vw - env(viewport-segment-left 1 0)); height: auto; order: 2;
+    margin-left: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0));
+    border-top: 0; border-left: 1px solid var(--line);
+  }
+  .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
+  .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
+  .sheet-toggle { display: none; }
+  .toolbar { order: 0; display: flex; width: 64px; flex-direction: column; align-items: center; overflow-y: auto; border-top: 0; border-right: 1px solid var(--line); }
+  .tool { width: 54px; }
+  .toolbar .current { flex-direction: column; grid-column: auto; }
+  .zoom { flex-direction: column; grid-column: auto; margin: auto 0 0; }
+  .zoom button { width: 44px; }
+  /* messages in the right half, clear of the hinge */
+  .toast { left: calc(env(viewport-segment-left 1 0) + env(viewport-segment-width 1 0) / 2); max-width: calc(env(viewport-segment-width 1 0) - 32px); }
+  .stage { order: 1; }
 }
 
 /* Printing: only the per-tray sheets */
@@ -259,6 +487,7 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
   .sheet-head { break-after: avoid; }
   .sheet h2 { font-size: 16px; margin: 0 0 6px; }
   .sheet-sub { font-size: 12px; color: #555; margin-bottom: 6px; }
+  .sheet-credit { font-size: 10px; color: #777; margin-bottom: 4px; }
   /* Fit each pattern on one page: as wide as the page allows, but never taller than it. */
   .sheet-img { display: block; width: auto; height: auto; max-width: 100%; max-height: 72vh; break-inside: avoid; }
   .sheet table { border-collapse: collapse; font-size: 11px; margin-top: 8px; }
