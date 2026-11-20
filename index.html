@@ -179,8 +179,10 @@
       <p>Anyone who opens this link gets their own copy of this design in Pindou Studio. The design is inside the link itself; Pindou Studio doesn't upload it anywhere.</p>
       <label>Link <input id="linkText" readonly spellcheck="false" autocomplete="off"></label>
       <p class="hint" id="linkHint"></p>
+      <div id="linkLiveRow" class="dlg-group">
       <label class="switch"><input type="checkbox" role="switch" id="linkLive" aria-describedby="linkLiveHint"> Keep this design's link in the address bar</label>
       <p class="hint" id="linkLiveHint">To bookmark the design: turn this on, then bookmark the page (Ctrl+D, ⌘D, or the ☆ in the address bar or browser menu). While it's on, the address follows your edits in this tab, so each bookmark saves the design as it was when you made it.</p>
+      </div>
       <div class="dlg-actions">
         <button type="button" class="primary" id="linkCopy"><span id="linkCopyLabel">Copy link</span></button>
         <button type="button" id="linkShare" hidden>Share…</button>
@@ -198,7 +200,7 @@
       <div class="dlg-actions">
         <button value="open" class="primary">Open it</button>
         <button value="save-open">Save mine, then open</button>
-        <button value="keep">Keep mine</button>
+        <button value="keep" autofocus>Keep mine</button>
       </div>
     </form>
   </dialog>

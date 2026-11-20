@@ -212,6 +212,8 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dlg h2 { margin: 0 0 4px; font-size: 18px; }
 .dlg label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .dlg label.check { flex-direction: row; }
+.dlg-group { display: flex; flex-direction: column; gap: 10px; }
+.dlg-group[hidden] { display: none; }
 /* An on/off switch (a checkbox with role="switch") */
 .dlg label.switch { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
 .switch input {

@@ -1250,6 +1250,73 @@ test('share link: phone: Share is in the ⋯ menu and the dialog fits', async (p
   assert(!(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)), 'page scrolls sideways');
 }, touch({ width: 360, height: 640 }));
 
+async function switchOn(p) {
+  await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+  await p.check('#linkLive'); await p.click('#linkDialog button[value=close]');
+  await p.waitForFunction(() => location.hash.startsWith('#pattern='));
+}
+const reloaded = async (p) => { await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady); await p.waitForTimeout(400); };
+test('share link: reloading right after an edit, with the address switch on, keeps the latest work', async (p) => {
+  await stroke(p, 4); await switchOn(p);
+  await p.click('[data-tool=pencil]'); await p.mouse.click(...await cellPoint(p, 20, 20));
+  await p.reload(); await reloaded(p); // before the address has caught up
+  eq(await p.evaluate(() => document.querySelector('#linkOpenDialog').open), false, 'asked about its own older copy');
+  eq(await beads(p), 5, 'beads after reload');
+  await p.waitForFunction(async () => { const h = location.hash.slice(9); return h && (await __pindou.unpackDesign(h)).state.cells.filter((v) => v >= 0).length === 5; }, null, { timeout: 3000 });
+  // and when the newer state is empty, the older copy isn't opened silently either
+  await newDesign(p);
+  await p.reload(); await reloaded(p);
+  eq(await beads(p), 0, 'beads after clearing and reloading');
+  assert(!/from a link/.test(await p.textContent('#toastText')), 'opened its own old copy');
+});
+test('share link: a second link while the question is open replaces the question', async (p, browser) => {
+  await stroke(p, 8); const a = await shareUrl(p);
+  await stroke(p, 12); const b = await shareUrl(p);
+  const t = await openLink(browser, p.url().split('#')[0]);
+  await stroke(t, 3); await t.waitForTimeout(500);
+  await t.goto('about:blank'); await t.goto(a); // a real page load with the link
+  await t.waitForFunction(() => document.querySelector('#linkOpenDialog').open, null, { timeout: 5000 });
+  assert(/8 beads/.test(await t.textContent('#linkOpenText')), 'first question');
+  eq(await t.evaluate(() => document.activeElement.value), 'keep', 'focus starts on Keep mine');
+  await t.evaluate((u) => { location.hash = u.split('#')[1]; }, b);
+  await t.waitForFunction(() => /12 beads/.test(document.querySelector('#linkOpenText').textContent) && document.querySelector('#linkOpenDialog').open, null, { timeout: 5000 });
+  await t.click('#linkOpenDialog button[value=open]'); await t.waitForTimeout(300);
+  eq(await beads(t), 12, 'beads opened');
+  eq(await hashOf(t), '', 'address');
+  await t.ctx.close();
+});
+test('share link: a link arriving with the Share dialog open closes it first', async (p, browser) => {
+  await stroke(p, 8); const a = await shareUrl(p);
+  const t = await openLink(browser, p.url().split('#')[0]);
+  await stroke(t, 3);
+  await t.click('[data-action=share-link]'); await t.waitForFunction(() => document.querySelector('#linkDialog').open);
+  await t.evaluate((u) => { location.hash = u.split('#')[1]; }, a);
+  await t.waitForFunction(() => document.querySelector('#linkOpenDialog').open, null, { timeout: 5000 });
+  eq(await t.evaluate(() => document.querySelector('#linkDialog').open), false, 'Share dialog with the old link still open');
+  await t.ctx.close();
+});
+test('share link: a browser that can\'t unzip keeps the link in the address and says so', async (p, browser) => {
+  await stroke(p, 8); const a = await shareUrl(p);
+  const ctx = await browser.newContext();
+  await ctx.addInitScript(() => { delete window.DecompressionStream; delete window.CompressionStream; });
+  const t = await ctx.newPage(); await t.goto(a); await reloaded(t);
+  assert(/too old to open pattern links/.test(await t.textContent('#toastText')), 'no message');
+  assert((await hashOf(t)).startsWith('#pattern='), 'link removed from the address');
+  await t.click('[data-action=share-link]'); await t.waitForTimeout(200);
+  eq(await t.evaluate(() => document.querySelector('#linkDialog').open), false, 'offered a link it can\'t make');
+  await ctx.close();
+});
+test('share link: a link arriving while a paused tab is already taking over leaves it waiting', async (p) => {
+  await stroke(p, 4); const a = await shareUrl(p);
+  const t = await secondTab(p);
+  await p.evaluate(() => { __pindou.tab.chan.onmessage = null; }); // the editing tab stops answering
+  await t.click('#tabTake'); await t.waitForTimeout(100);
+  eq(await t.evaluate(() => __pindou.tab.state), 'taking', 'state');
+  await t.evaluate((u) => { location.hash = u.split('#')[1]; }, a); await t.waitForTimeout(200);
+  eq(await t.evaluate(() => document.querySelector('#tabTake').getAttribute('aria-disabled')), 'true', 'button enabled again');
+  eq(await t.textContent('#tabTakeLabel'), 'Taking over…', 'label');
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

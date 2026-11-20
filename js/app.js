@@ -975,6 +975,10 @@
   const LINK_MAX = 32000;  // longest link offered; past this, "save the file"
   const LINK_LONG = 2000;  // past this, warn that some chat apps cut links short
   const LINK_UNPACKED_MAX = 2 * 1024 * 1024; // decompression stops here (624² beads need < 1 MB)
+  // Older browsers (Safari < 16.4, Firefox < 113, Chrome < 103) can't (de)compress this way.
+  const linkCodec = (() => {
+    try { new CompressionStream('deflate-raw'); new DecompressionStream('deflate-raw'); return true; } catch { return false; }
+  })();
   async function packDesign(d) {
     const out = [];
     const num = (v) => { do { const b = v % 128; v = Math.floor(v / 128); out.push(v ? b | 128 : b); } while (v); };
@@ -1040,6 +1044,16 @@
     const h = location.hash;
     return h.startsWith('#' + LINK_KEY) ? h.slice(1 + LINK_KEY.length) : null;
   }
+  // The address switch writes this tab's own design into the address. That copy can be
+  // a moment behind the autosave (and "Duplicate tab" copies it), so it's remembered and
+  // never treated as a link someone gave us: the autosave is newer.
+  const OWN_LINK_KEY = 'pindou.linkLive.hash';
+  function ownLink() { try { return sessionStorage.getItem(OWN_LINK_KEY); } catch { return null; } }
+  function setOwnLink(v) { try { if (v) sessionStorage.setItem(OWN_LINK_KEY, v); else sessionStorage.removeItem(OWN_LINK_KEY); } catch { /* not kept */ } }
+  function incomingLink() {
+    const data = linkInAddress();
+    return data != null && data !== ownLink() ? data : null;
+  }
   function clearLinkFromAddress() { history.replaceState(history.state, '', location.pathname + location.search); }
 
   async function shareLink() {
@@ -1058,6 +1072,7 @@
     $('#linkShare').hidden = !(navigator.share && (!navigator.canShare || navigator.canShare({ url })));
     $('#linkCopyLabel').textContent = 'Copy link';
     $('#linkLive').checked = linkLive;
+    $('#linkLiveRow').hidden = !linkCodec;
     showDialog($('#linkDialog'));
     $('#linkText').select();
   }
@@ -1070,7 +1085,8 @@
     linkLive = on;
     try { if (on) sessionStorage.setItem('pindou.linkLive', '1'); else sessionStorage.removeItem('pindou.linkLive'); } catch { /* not kept past a reload */ }
     clearTimeout(addressTimer); addressSeq++;
-    if (on) { addressTooBig = false; syncAddress(); } else if (linkInAddress() != null && !linkBusy) clearLinkFromAddress();
+    if (on) { addressTooBig = false; syncAddress(); }
+    else { if (linkInAddress() != null && linkInAddress() === ownLink()) clearLinkFromAddress(); setOwnLink(null); }
   }
   function scheduleAddressSync() {
     if (!linkLive) return;
@@ -1085,16 +1101,18 @@
     if (seq !== addressSeq || !linkLive || !tab.editing || linkBusy) return; // a newer change, or things moved on
     if (url.length > LINK_MAX) {
       if (linkInAddress() != null) clearLinkFromAddress();
+      setOwnLink(null);
       if (!addressTooBig) { addressTooBig = true; toast('This design is now too detailed for a link, so the address bar no longer holds it. Use Save to keep it as a file.', { sticky: true }); }
       return;
     }
     if (addressTooBig) { addressTooBig = false; toast("The design fits in a link again, so it's back in the address bar."); }
+    setOwnLink(url.slice(url.indexOf('#') + 1 + LINK_KEY.length));
     if (location.href !== url) history.replaceState(history.state, '', url);
   }
   // This tab stopped editing: its address would be an old copy, so take the design out.
   function dropLiveAddress() {
     clearTimeout(addressTimer); addressSeq++;
-    if (linkLive && !linkBusy && linkInAddress() != null) clearLinkFromAddress();
+    if (linkLive && !linkBusy && linkInAddress() != null && linkInAddress() === ownLink()) clearLinkFromAddress();
   }
   function sameAsCurrent(state, name) {
     if (state.w !== S.w || state.h !== S.h || state.paletteId !== S.paletteId || state.tray !== S.tray || name !== S.name) return false;
@@ -1117,9 +1135,14 @@
   let linkBusy = false, linkAgain = false;
   async function openLinkFromAddress() {
     if (linkBusy) { linkAgain = true; return; }
-    const data = linkInAddress();
-    if (data == null) { scheduleAddressSync(); return; }
+    const data = incomingLink();
+    if (data == null) { scheduleAddressSync(); return; } // nothing given, or this tab's own copy
     if (!tab.editing) return;
+    if (!linkCodec) {
+      // keep the link in the address, so it can be copied into another browser
+      toast("This browser is too old to open pattern links. The link is still in the address bar: open it in an up-to-date browser (or ask for the saved file instead).", { sticky: true });
+      return;
+    }
     linkBusy = true;
     try {
       let parsed;
@@ -1129,8 +1152,11 @@
         toast(`Couldn't open the pattern in this link: ${err.message}. Your design wasn't changed.`, { sticky: true });
         return;
       }
+      if (incomingLink() !== data) return; // another link arrived meanwhile: that one is next
       const { state, name, missing } = parsed;
-      if (sameAsCurrent(state, name)) { if (!linkLive) clearLinkFromAddress(); return; } // e.g. reloading this tab
+      if (sameAsCurrent(state, name)) { clearLinkFromAddress(); return; } // already open here
+      // dialogs open from before (Share would show the old design's link) go first
+      $$('dialog[open]').forEach((d) => { if (d.id !== 'tabDialog' && d.id !== 'linkOpenDialog') d.close('cancel'); });
       const hadBeads = S.cells.some((v) => v >= 0);
       let choice = 'open';
       if (hadBeads) {
@@ -1146,6 +1172,7 @@
         });
       }
       if (!tab.editing) return; // editing moved away meanwhile: the link waits for it to come back
+      if (incomingLink() !== data) return; // a newer link replaced this one while asking
       clearLinkFromAddress(); // with the switch on, the address is set again from the design below
       if (choice !== 'open' && choice !== 'save-open') { toast('Kept your design. The shared pattern was not opened.'); return; }
       if (choice === 'save-open') saveProject();
@@ -1394,7 +1421,7 @@
     $('#tabText').textContent = (tab.everEdited
       ? 'Editing moved to another tab, so this one is paused. That tab has everything from here.'
       : 'Pindou Studio is already open in another tab or window.')
-      + (linkInAddress() != null ? ' The pattern from your link opens here when you edit in this tab.' : '');
+      + (incomingLink() != null ? ' The pattern from your link opens here when you edit in this tab.' : '');
     $('#tabTake').removeAttribute('aria-disabled');
     $('#tabTakeLabel').textContent = 'Edit here instead';
     const d = $('#tabDialog');
@@ -2190,8 +2217,12 @@
       navigator.share({ title: S.name, url: $('#linkText').value }).catch(() => { /* cancelled */ });
     });
     window.addEventListener('hashchange', () => {
-      if (linkInAddress() == null) return;
-      if (tab.blocked) showTabNotice(); else openLinkFromAddress();
+      if (incomingLink() == null) return;
+      if (tab.blocked) { if (tab.state === 'paused') showTabNotice(); return; } // opens once this tab edits
+      // still asking about an earlier link: drop that question and ask about this one
+      const ask = $('#linkOpenDialog');
+      if (ask.open) ask.close('superseded');
+      openLinkFromAddress();
     });
 
     $('#openFile').addEventListener('change', async (e) => {
