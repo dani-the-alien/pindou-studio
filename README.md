@@ -29,6 +29,14 @@ P pencil · E eraser · F fill · I eyedropper · R swap · H pan (or hold Space
 
 There is no official machine-readable MARD hex list. These values are community approximations. The two public 221-color sources agree on 144 codes and differ slightly on the other 77 (median ΔE2000 ≈ 1.3), with larger disagreement on A25, F11, G8 and H13. Check close calls against a physical color card. H1 is treated as the clear (transparent) bead and is excluded from image matching.
 
+## Credits
+
+- **Pindou Studio** by Dani, written together with Claude (Anthropic) in Claude Code.
+- **MARD palette data** compiled by [HansBug/pindou-color-data](https://github.com/HansBug/pindou-color-data) (MIT). The 221-color set traces back to the alfonse.online / doudougongfang MARD pages, and the 291-color set to [get-colors-from-beans](https://git.xiongxiao.me/abearxiong/get-colors-from-beans) by abearxiong. [maxcleme/beadcolors](https://github.com/maxcleme/beadcolors) was used to cross-check values.
+- **CIEDE2000** color difference, implemented following G. Sharma, W. Wu & E. N. Dalal, "The CIEDE2000 color-difference formula: implementation notes, supplementary test data, and mathematical observations" (2005), and checked against their test data.
+- **OKLab / OKLCH** color space by Björn Ottosson (2020), used to sort and group the palette.
+- **Dithering** uses the Floyd–Steinberg error-diffusion algorithm (1976).
+
 ## License
 
 MIT, see `LICENSE`. The bundled MARD palette data is separately MIT-licensed by its author (`data/LICENSE-pindou-color-data`). Pindou Studio isn't affiliated with or endorsed by MARD.
