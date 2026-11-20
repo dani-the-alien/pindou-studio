@@ -2041,6 +2041,23 @@ test('check colors: a correction from another tab re-converts an open image inst
   await t.click('#imgApply'); await t.waitForTimeout(200);
   eq(await t.evaluate(() => [__pindou.S.w, __pindou.S.h]), [52, 26], 'imported size');
 });
+test('check colors: reopening puts focus on the earlier choice, so Enter keeps it', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]);
+  await p.click('#checkColors'); await p.click(`#checkPair [data-hex="${d.hexes[1]}"]`);
+  await p.click('#checkDialog button[value=done]');
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  eq(await p.evaluate(() => document.activeElement.dataset.hex), d.hexes[1], 'focused swatch');
+  await p.keyboard.press('Enter');
+  eq(JSON.parse(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')))[d.code], d.hexes[1], 'stored choice');
+});
+test('check colors: the summary updates when another tab changes a correction', async (p) => {
+  await p.click('#checkColors');
+  for (let k = 0; k < 11; k++) await p.click('#checkSkip');
+  assert(/No choices made/.test(await p.textContent('#checkSummaryText')), 'summary');
+  await p.evaluate(() => { const d = __pindou.disputedColors()[0]; localStorage.setItem('pindou.colorFixes', JSON.stringify({ [d.code]: d.hexes[1] })); window.dispatchEvent(new StorageEvent('storage', { key: 'pindou.colorFixes' })); });
+  assert(/Your choices/.test(await p.textContent('#checkSummaryText')), 'summary after another tab: ' + await p.textContent('#checkSummaryText'));
+  eq(await p.isVisible('#checkReset'), true, 'reset offered');
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';
