@@ -4,6 +4,10 @@ A browser-based design and layout tool for MARD 2.6mm fuse beads (拼豆). Draw 
 
 Plain HTML/CSS/JS: no build step, no server-side code, no accounts. Everything happens in your browser. Pictures you convert are never uploaded anywhere.
 
+## What is Pindou ##
+
+Pindou is a pixel art like system of making images with small plastic beads, then fusing them together permanently by pressing with a hot iron or heat press. I discovered Pindou (PIN-doo; 拼豆, approximately "piecing beans together") when I watched Maqaroon's video [How to Make Perler Beads Look Professional](https://www.youtube.com/watch?v=jfPZmNVr360). I bought a kit similar to the one they recommended.
+
 ## Get it and run it
 
 **Use it online:** https://dani-the-alien.github.io/pindou-studio/ (nothing to install; works on phones and tablets too).
