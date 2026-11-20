@@ -28,3 +28,7 @@ P pencil · E eraser · F fill · I eyedropper · R swap · H pan (or hold Space
 `data/mard-221.json` and `data/mard-291.json` come from [HansBug/pindou-color-data](https://github.com/HansBug/pindou-color-data) (MIT, see `data/LICENSE-pindou-color-data`). `js/palettes.js` is generated from them.
 
 There is no official machine-readable MARD hex list. These values are community approximations. The two public 221-color sources agree on 144 codes and differ slightly on the other 77 (median ΔE2000 ≈ 1.3), with larger disagreement on A25, F11, G8 and H13. Check close calls against a physical color card. H1 is treated as the clear (transparent) bead and is excluded from image matching.
+
+## License
+
+MIT, see `LICENSE`. The bundled MARD palette data is separately MIT-licensed by its author (`data/LICENSE-pindou-color-data`). Pindou Studio isn't affiliated with or endorsed by MARD.
