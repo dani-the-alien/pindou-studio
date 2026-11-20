@@ -228,6 +228,11 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); font-size: 13px;
 }
 .img-busy[hidden] { display: none; }
+/* small screens: the preview may be scrolled out of view, so the card is pinned to the
+   top of the screen instead (nothing scrolls, so a field being typed in stays put) */
+@media (max-width: 799.98px), (max-height: 520px) {
+  .img-busy { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 5; }
+}
 .img-busy-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
 .img-busy progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .img-busy-eta { color: var(--muted); font-size: 12px; min-height: 1.3em; }

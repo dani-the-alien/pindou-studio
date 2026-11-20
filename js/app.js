@@ -1038,7 +1038,7 @@
     ch.onmessage = (e) => { if (e.data === 'hello') ch.postMessage('here'); if (!warned) { warned = true; warn(); } };
     ch.postMessage('hello');
   }
-  function noLocking() { tab.state = 'off'; tab.editing = true; hideTabNotice(); if (tab.ready) tab.ready(); }
+  function noLocking() { warnNoLocking(); tab.state = 'off'; tab.editing = true; hideTabNotice(); if (tab.ready) tab.ready(); }
   function waitForLock() {
     if (tab.waiting || document.visibilityState !== 'visible') return;
     tab.waiting = new AbortController();
@@ -1656,7 +1656,6 @@
   const BUSY_DELAY = 400;
   function showBusy(pass, progress, passMs) {
     const pct = Math.min(99, Math.floor(progress * 100));
-    if ($('#imgBusy').hidden) requestAnimationFrame(() => $('#imgBusy').scrollIntoView({ block: 'nearest' }));
     $('#imgPreviewBox').classList.add('busy');
     $('#imgPreviewBox').setAttribute('aria-busy', 'true');
     $('#imgBusy').hidden = false;

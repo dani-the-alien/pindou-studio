@@ -622,7 +622,7 @@ for (const [name, vp, opts] of ALL_SCREENS) {
     const quick = await tappable(p, '#quickColors [data-q=current]');
     await openSheetIfPhone(p);
     assert(await tappable(p, '#swatches .sw'), 'the full palette shows no colors');
-    assert(quick || !(await p.evaluate(() => matchMedia('(max-width: 599px), (max-height: 520px)').matches)), 'no quick colors on a phone');
+    assert(quick || !(await p.evaluate(() => matchMedia('(max-width: 599.98px), (max-height: 520px)').matches)), 'no quick colors on a phone');
     // the palette's own controls still exist (maybe after the swatches)
     for (const sel of ['#paletteSelect', '#paletteSearch', '#paletteFilter', '#editOwned']) {
       assert(await p.evaluate((sel) => { const el = document.querySelector(sel); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }, sel), `${sel} not shown`);
@@ -956,7 +956,7 @@ test('phone: taking editing back leaves keyboard focus on a visible control', as
   await p.waitForTimeout(100);
   assert(await p.evaluate(() => document.activeElement !== document.body && document.activeElement.getClientRects().length > 0), 'focus lost');
 }, { viewport: { width: 412, height: 780 } });
-test('phone: the conversion progress card scrolls into view', async (p) => {
+test('phone: the conversion progress card is on screen', async (p) => {
   await p.tap('#moreBtn'); await p.tap('[data-action=import-image]');
   const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 400; const g = c.getContext('2d'); const d = g.createImageData(400, 400); for (let i = 0; i < d.data.length; i++) d.data[i] = i % 4 === 3 ? 255 : (Math.random() * 256) | 0; g.putImageData(d, 0, 0); return c.toDataURL(); });
   await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
@@ -965,6 +965,27 @@ test('phone: the conversion progress card scrolls into view', async (p) => {
   await p.waitForTimeout(300);
   assert(await p.evaluate(() => { const r = document.querySelector('#imgBusy').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), 'progress card off screen');
 }, touch({ width: 390, height: 780 }));
+test('phone: typing a size while converting keeps the field in view', async (p) => {
+  await p.tap('#moreBtn'); await p.tap('[data-action=import-image]');
+  const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 600; const g = c.getContext('2d'); const d = g.createImageData(600, 600); for (let i = 0; i < d.data.length; i++) d.data[i] = i % 4 === 3 ? 255 : (Math.random() * 256) | 0; g.putImageData(d, 0, 0); return c.toDataURL(); });
+  await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 60000 });
+  await p.evaluate(() => { document.querySelector('#imageDialog').scrollTop = 0; });
+  await p.focus('#imgW'); await p.fill('#imgW', '300'); await p.dispatchEvent('#imgW', 'input');
+  await p.waitForFunction(() => !document.querySelector('#imgBusy').hidden, null, { timeout: 10000 });
+  await p.waitForTimeout(300);
+  assert(await p.evaluate(() => { const r = document.querySelector('#imgW').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), 'Width field scrolled out of view');
+}, touch({ width: 390, height: 780 }));
+test('without Web Locks (plain http on a network address), a second tab gets a warning', async (p) => {
+  const ctx = await p.context().browser().newContext();
+  await ctx.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'locks', { get: () => undefined, configurable: true }); });
+  const a = await ctx.newPage(); await a.goto(p.url()); await a.waitForFunction(() => window.__pindou);
+  await a.waitForTimeout(300);
+  eq(await a.evaluate(() => document.querySelector('#toast').hidden), true, 'warned with only one tab');
+  const b = await ctx.newPage(); await b.goto(p.url()); await b.waitForFunction(() => window.__pindou);
+  for (const t of [a, b]) await t.waitForFunction(() => /can't stop them overwriting/.test(document.querySelector('#toastText').textContent), null, { timeout: 3000 });
+  await ctx.close();
+});
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);
