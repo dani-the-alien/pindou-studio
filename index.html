@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pindou Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <input id="projectName" class="project-name" value="Untitled" aria-label="Project name" spellcheck="false">
+    </div>
+    <nav class="top-actions">
+      <button data-action="new" title="New project">New</button>
+      <button data-action="import-image" title="Convert an image to a pattern">Image…</button>
+      <button data-action="open" title="Open a saved .pindou.json project">Open</button>
+      <button data-action="save" title="Download this project as .pindou.json">Save</button>
+      <div class="menu">
+        <button data-action="toggle-export" aria-haspopup="true" aria-expanded="false">Export ▾</button>
+        <div class="menu-pop" id="exportMenu" hidden>
+          <button data-action="export-png">Pattern PNG (with codes + legend)</button>
+          <button data-action="export-csv">Bead counts CSV</button>
+          <button data-action="print-trays">Print per-tray sheets</button>
+        </div>
+      </div>
+      <span class="sep"></span>
+      <button data-action="undo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+      <button data-action="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+    </nav>
+  </header>
+
+  <main class="workspace">
+    <aside class="toolbar" aria-label="Tools">
+      <button class="tool" data-tool="pencil" title="Pencil (P) · right-click erases">✎<span>Pencil</span></button>
+      <button class="tool" data-tool="eraser" title="Eraser (E)">⌫<span>Erase</span></button>
+      <button class="tool" data-tool="fill" title="Fill (F)">▧<span>Fill</span></button>
+      <button class="tool" data-tool="picker" title="Eyedropper (I)">⦿<span>Pick</span></button>
+      <button class="tool" data-tool="replace" title="Replace color (R): click a bead to swap every bead of that color for the current color">⇄<span>Swap</span></button>
+      <button class="tool" data-tool="pan" title="Pan (H) · or hold Space / middle-drag / two fingers">✋<span>Pan</span></button>
+      <div class="current" title="Current color">
+        <div id="currentSwatch" class="swatch big"></div>
+        <div id="currentCode" class="code">—</div>
+      </div>
+      <div class="zoom">
+        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
+        <button data-action="zoom-fit" title="Fit (0)">⤢</button>
+        <button data-action="zoom-out" title="Zoom out (−)">－</button>
+      </div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-bar">
+        <label>Tray
+          <select id="traySize" title="Pegs per side of one pegboard">
+            <option value="52">52 × 52</option>
+            <option value="72">72 × 72</option>
+            <option value="78">78 × 78</option>
+            <option value="104">104 × 104</option>
+            <option value="custom">Custom…</option>
+          </select>
+        </label>
+        <label>Guides
+          <select id="guides">
+            <option value="0">Off</option>
+            <option value="5">Every 5</option>
+            <option value="10" selected>Every 10</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="showCodes" checked> Codes</label>
+        <label class="check"><input type="checkbox" id="roundBeads"> Round beads</label>
+        <span class="grow"></span>
+        <span id="sizeInfo" class="muted"></span>
+      </div>
+      <div class="viewport" id="viewport">
+        <canvas id="canvas"></canvas>
+        <div id="focusBanner" class="focus-banner" hidden>
+          <button data-action="tray-prev" title="Previous tray ([)">‹</button>
+          <span id="focusLabel"></span>
+          <button data-action="tray-next" title="Next tray (])">›</button>
+          <button data-action="tray-unfocus" title="Show whole design (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="status" id="status">&nbsp;</div>
+    </section>
+
+    <aside class="sidebar">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="palette" aria-selected="true">Palette</button>
+        <button role="tab" data-tab="counts" aria-selected="false">Counts</button>
+        <button role="tab" data-tab="trays" aria-selected="false">Trays</button>
+      </div>
+
+      <div class="panel" data-panel="palette">
+        <div class="row">
+          <select id="paletteSelect" aria-label="Palette"></select>
+          <input id="paletteSearch" type="search" placeholder="Find code (e.g. A1, H7)" aria-label="Find color code">
+        </div>
+        <div class="row">
+          <div class="seg" id="paletteFilter">
+            <button data-filter="all" aria-pressed="true">All</button>
+            <button data-filter="owned" aria-pressed="false">My beads</button>
+            <button data-filter="used" aria-pressed="false">In design</button>
+          </div>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="editOwned"> Edit my collection</label>
+          <span class="grow"></span>
+          <button id="ownAll" class="small" hidden>All</button>
+          <button id="ownNone" class="small" hidden>None</button>
+        </div>
+        <p id="ownedHint" class="hint" hidden>Tap colors to mark which ones you actually own. Image conversion can be limited to your collection.</p>
+        <div id="swatches" class="swatches"></div>
+        <p class="hint">Hex values are community approximations of MARD beads (screens and photos vary). Check against a physical color card for close calls.</p>
+      </div>
+
+      <div class="panel" data-panel="counts" hidden>
+        <div class="row">
+          <strong id="countTotal">0 beads</strong>
+          <span class="grow"></span>
+          <div class="seg" id="countSort">
+            <button data-sort="count" aria-pressed="true">By count</button>
+            <button data-sort="code" aria-pressed="false">By code</button>
+          </div>
+        </div>
+        <p id="countScope" class="hint"></p>
+        <table class="counts"><tbody id="countBody"></tbody></table>
+      </div>
+
+      <div class="panel" data-panel="trays" hidden>
+        <p class="hint" id="trayInfo"></p>
+        <div id="trayGrid" class="tray-grid"></div>
+        <p class="hint">Click a tray to build it one board at a time: other trays dim, and Counts switches to that tray. Use [ and ] to step through.</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- New project -->
+  <dialog id="newDialog">
+    <form method="dialog" class="dlg">
+      <h2>New design</h2>
+      <div class="field-row">
+        <label>Tray size
+          <select id="newTray">
+            <option value="52">52 × 52</option><option value="72">72 × 72</option>
+            <option value="78">78 × 78</option><option value="104">104 × 104</option>
+          </select>
+        </label>
+        <label>Trays across <input id="newAcross" type="number" min="1" max="12" value="1"></label>
+        <label>Trays down <input id="newDown" type="number" min="1" max="12" value="1"></label>
+      </div>
+      <p class="hint">Or set an exact size in beads (it doesn't have to fill whole trays):</p>
+      <div class="field-row">
+        <label>Width <input id="newW" type="number" min="1" max="624" value="52"></label>
+        <label>Height <input id="newH" type="number" min="1" max="624" value="52"></label>
+      </div>
+      <p class="hint" id="newSummary"></p>
+      <label class="check"><input type="checkbox" id="newKeep"> Keep current design (resize the canvas, anchored top-left)</label>
+      <div class="dlg-actions">
+        <button value="cancel">Cancel</button>
+        <button value="ok" class="primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Image import -->
+  <dialog id="imageDialog" class="wide">
+    <form method="dialog" class="dlg">
+      <h2>Image → pattern</h2>
+      <div class="import-layout">
+        <div class="import-controls">
+          <label class="file">Image <input id="imgFile" type="file" accept="image/*"></label>
+          <div class="field-row">
+            <label>Width (beads) <input id="imgW" type="number" min="4" max="624" value="52"></label>
+            <label>Height <input id="imgH" type="number" min="4" max="624" value="52"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="imgLock" checked> Keep aspect ratio</label>
+          <div class="quick" id="imgQuick"></div>
+          <label>Max colors <input id="imgMax" type="number" min="0" max="291" value="0" title="0 = no limit"></label>
+          <label class="check"><input type="checkbox" id="imgOwned"> Only use my collection</label>
+          <label class="check"><input type="checkbox" id="imgDither"> Dithering (smoother gradients, noisier to build)</label>
+          <label class="check"><input type="checkbox" id="imgBg"> Remove background (connected to the edges)</label>
+          <label class="check"><input type="checkbox" id="imgClear" checked> Transparent pixels → empty</label>
+          <p class="hint" id="imgStats"></p>
+        </div>
+        <div class="import-preview">
+          <canvas id="imgPreview" width="320" height="320"></canvas>
+        </div>
+      </div>
+      <div class="dlg-actions">
+        <button value="cancel">Cancel</button>
+        <button value="ok" class="primary" id="imgApply" disabled>Use pattern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="openFile" accept=".json,application/json" hidden>
+  <div id="printRoot" class="print-root"></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="js/palettes.js"></script>
+  <script src="js/color.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
