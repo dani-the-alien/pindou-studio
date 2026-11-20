@@ -575,10 +575,14 @@ const tappable = (p, sel) => p.evaluate((sel) => {
   if (!el) return false;
   const r = el.getBoundingClientRect();
   if (!r.width || !r.height) return false;
-  const x = r.left + r.width / 2, y = r.top + r.height / 2;
-  if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
-  const hit = document.elementFromPoint(x, y);
-  return !!hit && (hit === el || el.contains(hit));
+  // the whole control: its middle and points just inside each corner
+  const i = Math.min(4, r.width / 4, r.height / 4);
+  const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + i, r.top + i], [r.right - i, r.top + i], [r.left + i, r.bottom - i], [r.right - i, r.bottom - i]];
+  return pts.every(([x, y]) => {
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (hit === el || el.contains(hit));
+  });
 }, sel);
 async function openSheetIfPhone(p) {
   if (await tappable(p, '#sheetToggle') && (await p.getAttribute('#sheetToggle', 'aria-expanded')) === 'false') { await p.click('#sheetToggle'); await p.waitForTimeout(150); }
@@ -712,7 +716,7 @@ async function fold(p, vp, orientation, offset, maskLength) {
 }
 // Hinge across the screen (one segment above the other): flip phone half-open, a big
 // foldable or tablet used like a little laptop.
-for (const [name, vp, at] of [['flip phone', { width: 412, height: 820 }, 400], ['big foldable', { width: 720, height: 790 }, 385], ['tall tablet', { width: 820, height: 1060 }, 520]]) {
+for (const [name, vp, at] of [['flip phone', { width: 412, height: 820 }, 400], ['big foldable', { width: 720, height: 790 }, 385], ['big foldable, tabletop', { width: 790, height: 720 }, 352], ['tall tablet', { width: 820, height: 1060 }, 520]]) {
   test(`${name} half-open, hinge across: canvas above, controls below, all reachable`, async (p) => {
     await fold(p, vp, 'horizontal', at, 20);
     const r = await p.evaluate(() => {
@@ -730,6 +734,19 @@ for (const [name, vp, at] of [['flip phone', { width: 412, height: 820 }, 400], 
     assert(await tappable(p, '[data-action=zoom-fit]'), 'Fit');
   }, touch(vp));
 }
+test('flip phone sideways, half-open like a book: all tools reachable', async (p) => {
+  await fold(p, { width: 820, height: 412 }, 'vertical', 400, 20);
+  for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
+  assert(await tappable(p, '[data-action=zoom-fit]'), 'Fit');
+  assert(await tappable(p, '#swatches .sw'), 'no swatch on screen');
+}, touch({ width: 820, height: 412 }));
+test('folded with the hinge across: messages appear above the hinge, clear of the tools', async (p) => {
+  await fold(p, { width: 720, height: 790 }, 'horizontal', 385, 20);
+  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await p.waitForFunction(() => !document.querySelector('#toast').hidden);
+  const r = await p.evaluate(() => ({ bottom: document.querySelector('#toast').getBoundingClientRect().bottom, hinge: window.viewport.segments[0].height }));
+  assert(r.bottom <= r.hinge, `message reaches ${r.bottom}, hinge at ${r.hinge}`);
+}, touch({ width: 720, height: 790 }));
 test('book-style foldable half-open: canvas on the left half, panels on the right', async (p) => {
   await fold(p, { width: 790, height: 720 }, 'vertical', 386, 18);
   const r = await p.evaluate(() => {
@@ -829,11 +846,37 @@ test('phones in landscape: quick colors at the top of the sidebar, swatches befo
   const r = await p.evaluate(() => [document.querySelector('#swatches').getBoundingClientRect().top, document.querySelector('#paletteSelect').getBoundingClientRect().top]);
   assert(r[0] < r[1], 'controls before the swatches');
 }, touch(SCREENS['small phone in landscape']));
-test('flip phone half-open: the current color does not pretend to open a sheet; Escape still leaves a tray', async (p) => {
+test('flip phone half-open: the current color does not pretend to open a sheet', async (p) => {
   await fold(p, { width: 412, height: 820 }, 'horizontal', 400, 20);
   await p.tap('#quickColors [data-q=current]');
   eq([await p.getAttribute('#quickColors [data-q=current]', 'aria-expanded'), await p.evaluate(() => document.querySelector('#sidebar').classList.contains('expanded'))], [null, false], 'sheet state');
 }, touch({ width: 412, height: 820 }));
+test('compact: after an action from the ⋯ menu, keyboard focus comes back to ⋯', async (p) => {
+  await p.focus('#moreBtn'); await p.keyboard.press('Enter');
+  await p.keyboard.press('Enter'); // New (first item)
+  assert(await p.evaluate(() => document.querySelector('#newDialog').open), 'New did not open');
+  await p.keyboard.press('Escape');
+  eq(await p.evaluate(() => document.activeElement.id), 'moreBtn', 'focus after closing the dialog');
+}, { viewport: { width: 412, height: 780 } });
+test('tablet: the ⋯ menu does not stay open after rotating to a layout without it', async (p) => {
+  await p.click('#moreBtn');
+  await p.setViewportSize({ width: 1024, height: 768 }); await p.waitForTimeout(200);
+  eq(await p.evaluate(() => [document.querySelector('#fileActions').classList.contains('open'), document.querySelector('#moreBtn').getAttribute('aria-expanded')]), [false, 'false'], 'menu state');
+  await p.mouse.click(500, 400); // a canvas click draws again
+  assert(await beads(p) > 0, 'first canvas click after rotating was swallowed');
+}, { viewport: { width: 768, height: 1024 } });
+test('leaving the phone layout keeps keyboard focus on a visible control', async (p) => {
+  for (const [sel, size] of [['#sheetToggle', { width: 720, height: 790 }], ['#quickColors [data-q=current]', { width: 780, height: 412 }]]) {
+    await p.setViewportSize({ width: 412, height: 780 }); await p.waitForTimeout(150);
+    await p.focus(sel);
+    await p.setViewportSize(size); await p.waitForTimeout(200);
+    assert(await p.evaluate(() => document.activeElement !== document.body && document.activeElement.getClientRects().length > 0), `focus lost after leaving the phone layout from ${sel}`);
+  }
+}, { viewport: { width: 412, height: 780 } });
+test('low desktop window (1024×540): every tool and zoom button reachable', async (p) => {
+  for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
+  for (const a of ['zoom-in', 'zoom-fit', 'zoom-out']) assert(await tappable(p, `[data-action=${a}]`), a);
+}, { viewport: { width: 1024, height: 540 } });
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);
