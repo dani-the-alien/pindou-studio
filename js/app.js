@@ -772,8 +772,8 @@
   const check = { list: [], k: 0 };
   function openCheckColors() {
     check.list = disputedColors(); check.k = 0;
+    showDialog($('#checkDialog')); // first: focus can't move into a closed dialog
     showCheckStep(true);
-    showDialog($('#checkDialog'));
   }
   // focusSwatch: after opening or picking. After Skip or Back, focus stays on that button,
   // so pressing Enter again skips again rather than picking a color.
@@ -788,7 +788,8 @@
         ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, in both palettes, on this device.`
         : 'No choices made: the colors are as published.';
       $('#checkReset').hidden = !fixed.length;
-      $('#checkSummary').focus();
+      // move focus only from the step that just ended (not when another tab's change re-renders it)
+      if (focusSwatch || $('#checkStepBox').contains(document.activeElement) || document.activeElement === document.body || $('#checkSkip') === document.activeElement) $('#checkSummary').focus();
       return;
     }
     const d = check.list[check.k], mine = fixFor(d.code);
@@ -2806,7 +2807,7 @@
     window.addEventListener('storage', (e) => {
       if (e.key !== FIX_KEY) return;
       colorFixes = loadColorFixes(); recolorPalette();
-      if ($('#checkDialog').open && check.k < check.list.length) showCheckStep(); // the step's "your choice" may have changed
+      if ($('#checkDialog').open) showCheckStep(); // the step's "your choice", or the summary, may have changed
     });
 
     $('#linkCopy').addEventListener('click', copyLink);
