@@ -57,6 +57,9 @@ Your current design autosaves in the browser, **tied to that exact address and b
 | Ctrl+S | Save the project |
 | [ · ] · Esc | Previous / next tray · leave tray focus, or close the menu, the ⋯ menu or the phone color sheet |
 | ← → · Home · End (in the quick-color row) | Move along the quick colors |
+| Tab to the canvas, then ← → ↑ ↓ (Shift: 10) · Home · End | Move the drawing cursor (screen readers announce where it is and what's there) |
+| Enter · Delete or Backspace (on the canvas) | Use the current tool at the cursor · erase there |
+| ← → · Home · End (on the Palette / Counts / Trays tabs) | Switch panels |
 
 On a Mac, Cmd works in place of Ctrl. Single-key shortcuts are ignored while you're typing in a text box or a dropdown has focus.
 
