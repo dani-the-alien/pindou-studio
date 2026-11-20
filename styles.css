@@ -178,7 +178,8 @@ input[type=number] { width: 80px; }
   padding-bottom: 2px;
 }
 .sw[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; z-index: 1; }
-.sw.unowned { opacity: .5; outline: 1px dashed var(--muted); outline-offset: -3px; }
+.sw.unowned { opacity: .5; }
+.sw.unowned::after { content: ''; position: absolute; inset: 3px; border: 1px dashed currentColor; border-radius: 5px; pointer-events: none; }
 .sw .used-dot { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .group-label { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: 6px; font-weight: 600; }
 
@@ -235,6 +236,7 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 /* Narrow screens: sidebar moves under the canvas */
 @media (max-width: 860px) {
+  .toast { inset: calc(env(safe-area-inset-top, 0px) + 8px) auto auto 50%; }
   body { overflow: auto; }
   .workspace { flex-direction: column; }
   .toolbar { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; padding: 4px 8px; }

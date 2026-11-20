@@ -14,12 +14,23 @@
   // open dialogs, and role="status" makes screen readers announce it. Long messages
   // stay longer; { sticky: true } (warnings, errors) stays until dismissed.
   let toastTimer;
+  // A modal dialog makes everything outside it inert (unclickable), so while one
+  // is open the toast lives inside it, and moves back out when it closes.
+  function moveToast(host) {
+    const t = $('#toast');
+    if (t.parentElement === host) return;
+    const visible = !t.hidden;
+    if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } }
+    host.appendChild(t);
+    if (visible) { if (t.showPopover) { try { t.showPopover(); } catch { /* unsupported */ } } t.hidden = false; }
+  }
+  function showDialog(dlg) {
+    dlg.showModal();
+    moveToast(dlg);
+  }
   function toast(msg, opts = {}) {
     const t = $('#toast');
-    // A modal dialog makes everything outside it inert (unclickable), so while one
-    // is open the toast lives inside it; it moves back when the dialog closes.
-    const host = document.querySelector('dialog[open]') || document.body;
-    if (t.parentElement !== host) { if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } } host.appendChild(t); }
+    moveToast(document.querySelector('dialog[open]') || document.body);
     $('#toastText').textContent = msg;
     $('#toastClose').hidden = !opts.sticky;
     if (t.showPopover) { try { if (t.matches(':popover-open')) t.hidePopover(); t.showPopover(); } catch { t.hidden = false; } }
@@ -136,6 +147,7 @@
     S.color = keep && S.codeIndex.has(keep) ? S.codeIndex.get(keep) : 0;
     imgState.result = null; // a conversion made with the old palette must never be applied
     imgState.caches = new Map();
+    cancelConvert();
   }
   // Switch palettes as one undoable step. Colors the new palette lacks are replaced
   // by their nearest match, after asking, since that changes the design.
@@ -394,7 +406,7 @@
     S.stroke = null; pixDirty = true; requestDraw();
   }
   // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
-  function snapshot() { return { paletteId: S.paletteId, tray: S.tray, w: S.w, h: S.h, cells: S.cells.slice() }; }
+  function snapshot() { return { paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: S.cells.slice() }; }
   const UNDO_STEPS = 200, UNDO_BYTES = 64 * 1024 * 1024;
   const recBytes = (r) => (r.type === 'cells' ? r.idx.length * 8 : (r.before.cells.length + r.after.cells.length) * 2);
   function pushUndo(rec) {
@@ -439,14 +451,14 @@
       selectColor(S.color);
     }
     if (st.tray && st.tray !== S.tray) { S.tray = st.tray; S.focus = null; syncTraySelect(); }
-    loadGrid(st);
+    if (typeof st.name === 'string' && st.name !== S.name) { S.name = st.name; $('#projectName').value = st.name; }
+    loadGrid(st); // refits the view only if the size changed
   }
   function replaceState(next, label) {
     const before = snapshot();
     applyState(next);
     pushUndo({ type: 'snap', before, after: snapshot() });
     changed(); refreshPanels();
-    fitView();
     if (label) toast(label);
   }
 
@@ -488,6 +500,7 @@
   const pointers = new Map();
   let gesture = null; // {kind:'draw'|'pan'|'pinch', ...}
   let spaceDown = false;
+  let keyboardFocus = null; // the element that last received focus from the keyboard
 
   function localPt(e) { const r = viewport.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
 
@@ -660,6 +673,7 @@
   // ---------- panels ----------
   let panelTimer;
   function changed() {
+    if (booted) dirty = true;
     requestDraw();
     renderStatus();
     clearTimeout(panelTimer);
@@ -725,7 +739,8 @@
     if (!box.children.length) box.innerHTML = '<p class="hint">No colors match.</p>';
   }
 
-  function renderCounts() {
+  function renderCounts() { keepFocus($('#countBody'), 'data-i', buildCounts); }
+  function buildCounts() {
     const rect = S.focus ? trayRect(S.focus.r, S.focus.c) : null;
     const counts = countRegion(rect);
     const list = usedList(counts, S.sort);
@@ -736,7 +751,7 @@
     body.innerHTML = '';
     for (const { c, n } of list) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><button type="button" class="code-btn" title="Use ${c.code}">${c.code}</button></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
+      tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><button type="button" class="code-btn" data-i="${c.i}" title="Use ${c.code}">${c.code}</button></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
       tr.addEventListener('click', () => selectColor(c.i));
       body.appendChild(tr);
     }
@@ -832,13 +847,18 @@
     download(safeName(S.name) + '.pindou.json', new Blob([JSON.stringify(serialize())], { type: 'application/json' }));
   }
   let saveTimer;
+  // Only a tab that changed something writes the autosave: otherwise closing an
+  // untouched second tab would overwrite work saved by the tab that was used.
+  let dirty = false, booted = false;
   function autosave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flushAutosave, 300);
   }
   function flushAutosave() {
     clearTimeout(saveTimer);
+    if (!dirty) return;
     store.set('pindou.autosave', serialize());
+    dirty = false;
   }
 
   // ---------- rendering for export / print ----------
@@ -986,13 +1006,13 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   // ---------- image → pattern ----------
-  const imgState = { img: null, aspect: 1, result: null, timer: null, stepTimer: null, job: null, caches: new Map() };
+  const imgState = { img: null, aspect: 1, result: null, timer: null, stepTimer: null, job: null, caches: new Map(), applyWhenDone: false };
 
   function openImageDialog() {
     const dlg = $('#imageDialog');
     $('#imgOwned').disabled = S.owned.size === 0;
     tp.sel = null; tp.hover = null;
-    dlg.showModal();
+    showDialog(dlg);
     // Always start from a fresh conversion with the current palette and settings.
     if (imgState.img) startConvert();
     else { imgState.result = null; $('#imgApply').disabled = true; }
@@ -1245,7 +1265,7 @@
       try { r = job.next(); } finally { jobDeadline = Infinity; }
       if (r.done) { imgState.job = null; showConversion(r.value); return; }
       const { pass, progress } = r.value;
-      $('#imgStats').textContent = `Converting… ${Math.round(progress * 100)}%${pass > 1 ? ' (reducing colors)' : ''}`;
+      $('#imgStats').textContent = `Converting… ${Math.round(progress * 100)}%${pass > 1 ? ' (reducing colors)' : ''}${imgState.applyWhenDone ? ' · will use the pattern when done' : ''}`;
       imgState.stepTimer = setTimeout(step, 0);
     };
     step();
@@ -1279,6 +1299,7 @@
     const ta = Math.ceil(w / S.tray), td = Math.ceil(h / S.tray);
     $('#imgStats').textContent = `${w}×${h} · ${fmt(beads)} beads · ${used.size} colors · ${ta}×${td} tray${ta * td > 1 ? 's' : ''} of ${S.tray}`;
     $('#imgApply').disabled = false;
+    if (imgState.applyWhenDone) { imgState.applyWhenDone = false; $('#imageDialog').close('ok'); }
   }
 
   // ---------- new / resize ----------
@@ -1295,7 +1316,7 @@
     $('#newW').value = S.w; $('#newH').value = S.h;
     $('#newKeep').checked = false;
     updateNewSummary();
-    $('#newDialog').showModal();
+    showDialog($('#newDialog'));
   }
   function updateNewSummary() {
     const w = +$('#newW').value | 0, h = +$('#newH').value | 0, t = +$('#newTray').value;
@@ -1357,14 +1378,9 @@
       else if (e.key === 'ArrowUp') { e.preventDefault(); items[(k - 1 + items.length) % items.length].focus(); }
     });
     $$('dialog').forEach((dlg) => dlg.addEventListener('close', () => {
-      const t = $('#toast');
-      if (t.parentElement !== dlg) return;
-      const visible = !t.hidden;
-      if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } }
-      document.body.appendChild(t);
-      if (visible) { if (t.showPopover) { try { t.showPopover(); } catch { /* unsupported */ } } t.hidden = false; }
+      if ($('#toast').parentElement === dlg) moveToast(document.body);
     }));
-    $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; autosave(); });
+    $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; dirty = true; autosave(); });
 
     $('#traySize').addEventListener('change', (e) => {
       if (e.target.value === 'custom') {
@@ -1438,8 +1454,7 @@
       catch (err) { toast(`Couldn't open ${f.name}: ${err.message}. Your current design wasn't changed.`, { sticky: true }); return; }
       const { state, name, missing } = parsed;
       S.focus = null;
-      replaceState(state, missing.length ? null : `Opened ${name}. Undo brings back the previous design.`);
-      S.name = name; $('#projectName').value = name;
+      replaceState({ ...state, name }, missing.length ? null : `Opened ${name}. Undo brings back the previous design.`);
       if (missing.length) {
         toast(`Opened ${name}, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${missing.join(', ')}. Undo brings back the previous design.`, { sticky: true });
       }
@@ -1458,9 +1473,8 @@
       const cells = new Int16Array(w * h).fill(-1);
       if (keep) for (let y = 0; y < Math.min(h, S.h); y++) for (let x = 0; x < Math.min(w, S.w); x++) cells[y * w + x] = S.cells[y * S.w + x];
       S.focus = null;
-      replaceState({ paletteId: S.paletteId, tray: +$('#newTray').value, w, h, cells },
+      replaceState({ paletteId: S.paletteId, tray: +$('#newTray').value, name: keep ? S.name : 'Untitled', w, h, cells },
         keep ? `Resized to ${w}×${h}. Undo brings back the previous size.` : `New ${w}×${h} design. Undo brings back the old one.`);
-      if (!keep) { S.name = 'Untitled'; $('#projectName').value = S.name; }
     });
 
     // image dialog
@@ -1504,25 +1518,46 @@
         applyTrayFit(tp.sel.a, tp.sel.d);
       }
     });
+    // "Use pattern" (or Enter) while a conversion is still running: keep the dialog
+    // open, finish it in slices, then apply. Never finish it in one blocking go.
+    idlg.querySelector('form').addEventListener('submit', (e) => {
+      if (e.submitter && e.submitter.value === 'ok' && convertPending()) {
+        e.preventDefault();
+        imgState.applyWhenDone = true;
+        if (!imgState.job) startConvert();
+      }
+    });
     idlg.addEventListener('close', () => {
-      if (idlg.returnValue !== 'ok') return;
-      if (convertPending()) runConvert(); // a setting changed moments ago: use it, not the previous result
-      if (!imgState.result) return;
+      const ok = idlg.returnValue === 'ok' && imgState.result && !convertPending();
+      imgState.applyWhenDone = false;
+      cancelConvert();
+      imgState.caches = new Map(); // match caches are only useful while the dialog is open
+      if (!ok) return;
       S.focus = null;
       replaceState({ paletteId: S.paletteId, tray: S.tray, ...imgState.result }, 'Pattern created. Undo brings back the previous design.');
     });
 
     // keyboard
+    // Remember whether focus last arrived by keyboard (Tab etc.) or by a pointer, so Space
+    // can press keyboard-focused controls but still pan after a mouse click. (:focus-visible
+    // can't tell: browsers switch it on as soon as any key, Space included, is pressed.)
+    let lastInput = 'keyboard';
+    document.addEventListener('pointerdown', () => { lastInput = 'pointer'; }, true);
+    document.addEventListener('keydown', (e) => { if (e.key !== ' ') lastInput = 'keyboard'; }, true);
+    document.addEventListener('focusin', (e) => { keyboardFocus = lastInput === 'keyboard' ? e.target : null; });
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       // Ctrl+S saves the project from anywhere, including while typing its name.
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
-      if (e.target.closest('input, select, textarea, dialog')) return;
-      // Let Space press whatever button, tab or link has focus.
-      if (e.key === ' ' && e.target.closest('button, a, [role=tab], [role=slider], [tabindex]:not(#viewport)')) return;
-      if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-      if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return; }
+      if (e.target.closest('dialog')) return;
+      // Text fields keep their own undo; dropdowns and checkboxes don't have one.
+      const typing = e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]), textarea, [contenteditable]');
+      if (!typing && (e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if (!typing && (e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return; }
+      if (e.target.closest('input, select, textarea')) return;
+      // Space presses a control reached with the keyboard; after a mouse click it still pans.
+      if (e.key === ' ' && e.target === keyboardFocus && e.target.closest('button, a, [role=tab], [role=slider], [tabindex]:not(#viewport)')) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === ' ') { if (!spaceDown) { spaceDown = true; viewport.classList.add('pan'); } e.preventDefault(); return; }
       const tools = { p: 'pencil', b: 'pencil', e: 'eraser', f: 'fill', g: 'fill', i: 'picker', r: 'replace', h: 'pan' };
@@ -1534,7 +1569,11 @@
       else if (k === ']') stepTray(1);
       else if (k === 'escape' && S.focus) focusTray(null);
     });
-    window.addEventListener('keyup', (e) => { if (e.key === ' ') { spaceDown = false; viewport.classList.toggle('pan', S.tool === 'pan'); } });
+    window.addEventListener('keyup', (e) => {
+      if (e.key !== ' ' || !spaceDown) return;
+      e.preventDefault(); // don't let the release "click" a button that kept focus after a mouse click
+      spaceDown = false; viewport.classList.toggle('pan', S.tool === 'pan');
+    });
 
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
@@ -1596,6 +1635,7 @@
     fitView();
     refreshPanels();
     updateUndoButtons();
+    booted = true;
     $('#status').textContent = `Pindou Studio v${VERSION}`;
     checkVersion();
   }

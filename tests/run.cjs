@@ -311,6 +311,93 @@ test('sliced image conversion matches a straight-through one and keeps the page 
   assert(r.worst < 300, `page froze for ${r.worst} ms`);
 });
 
+// ---------- regressions from the 1.0 release review ----------
+test('closing an untouched second tab does not overwrite the other tab\'s autosave', async (p) => {
+  const second = await p.ctx.newPage();
+  await second.goto(p.url()); await second.waitForFunction(() => window.__pindou);
+  await second.click('[data-tool=fill]'); await second.mouse.click(...await cellPoint(second, 5, 5));
+  await second.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await p.evaluate(() => { window.dispatchEvent(new Event('pagehide')); }); // the untouched tab closes
+  const n = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')).cells.filter((v) => v >= 0).length);
+  eq(n, 52 * 52, 'beads in autosave');
+});
+test('Space still pans after clicking a button with the mouse', async (p) => {
+  await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
+  const [x, y] = await cellPoint(p, 10, 10);
+  await p.keyboard.down(' '); await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x + 80, y + 40, { steps: 4 }); await p.mouse.up(); await p.keyboard.up(' ');
+  eq(await beads(p), 0, 'beads after Space-drag');
+  await p.click('[data-tool=pencil]'); await p.mouse.click(x, y); await p.mouse.click(x + 30, y);
+  await p.click('[data-action=undo]'); // focus stays on Undo
+  const after = await p.evaluate(() => __pindou.S.undo.length);
+  await p.keyboard.press(' ');
+  eq(await p.evaluate(() => __pindou.S.undo.length), after, 'Space after clicking Undo must not undo again');
+});
+test('Use pattern during a conversion keeps the page responsive and applies the new settings', async (p) => {
+  await p.click('[data-action=import-image]');
+  const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 500; const g = c.getContext('2d'); const d = g.createImageData(500, 500); let s = 11; for (let i = 0; i < d.data.length; i += 4) { s = (s * 1103515245 + 12345) & 0x7fffffff; d.data[i] = s & 255; d.data[i + 1] = (s >> 8) & 255; d.data[i + 2] = (s >> 16) & 255; d.data[i + 3] = 255; } g.putImageData(d, 0, 0); return c.toDataURL(); });
+  await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 60000 });
+  const r = await p.evaluate(async () => {
+    let last = performance.now(), worst = 0; const hb = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+    const el = document.querySelector('#imgW'); el.value = '260'; el.dispatchEvent(new Event('input'));
+    document.querySelector('#imgApply').click();
+    await new Promise((ok) => { const chk = () => (!document.querySelector('#imageDialog').open ? ok() : setTimeout(chk, 10)); chk(); });
+    clearInterval(hb);
+    return { worst: Math.round(worst), w: __pindou.S.w };
+  });
+  eq(r.w, 260, 'applied width');
+  assert(r.worst < 300, `page froze for ${r.worst} ms`);
+});
+test('cancelling the image dialog stops the conversion; a palette switch afterwards is safe', async (p) => {
+  p.on('dialog', (d) => d.accept());
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 900, 900));
+  await p.fill('#imgW', '400'); await p.dispatchEvent('#imgW', 'input');
+  await p.waitForTimeout(250);
+  await p.click('#imageDialog button[value=cancel]');
+  eq(await p.evaluate(() => !!__pindou.imgState.job), false, 'job still running after Cancel');
+  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(200);
+  await p.selectOption('#paletteSelect', 'mard221'); await p.waitForTimeout(200);
+  eq(p.errors, [], 'page errors');
+});
+test('the selected swatch keeps its selection ring even when not in my collection', async (p) => {
+  await p.check('#editOwned'); await p.click('#ownNone'); await p.uncheck('#editOwned');
+  const style = await p.evaluate(() => { const b = document.querySelector('#swatches .sw[aria-pressed=true]'); const cs = getComputedStyle(b); return [b.classList.contains('unowned'), cs.outlineStyle, cs.outlineWidth]; });
+  eq(style, [true, 'solid', '3px'], 'selected unowned swatch outline');
+});
+test('a warning showing before a dialog opens can still be dismissed', async (p) => {
+  await openFile(p, '{"not": "a project"}');
+  assert(await p.isVisible('#toastClose'), 'no sticky warning');
+  await p.click('[data-action=new]');
+  await p.click('#toastClose', { timeout: 2000 });
+  assert(!(await p.isVisible('#toast')), 'toast still visible');
+});
+test('the Counts panel keeps keyboard focus when it refreshes', async (p) => {
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
+  await p.click('[role=tab][data-tab=counts]'); await p.waitForTimeout(300);
+  await p.focus('#countBody .code-btn'); await p.keyboard.press('Control+z'); await p.keyboard.press('Control+Shift+z'); await p.waitForTimeout(300);
+  eq(await p.evaluate(() => document.activeElement.classList.contains('code-btn')), true, 'focus on a count button');
+});
+test('undoing Open brings back the previous project name', async (p) => {
+  await p.fill('#projectName', 'Frog'); await p.dispatchEvent('#projectName', 'input');
+  await p.click('[data-tool=pencil]');
+  await openFile(p, { format: 'pindou-studio', version: 1, name: 'Cat', palette: 'mard221', w: 2, h: 1, legend: ['A1'], cells: [0, 0] });
+  eq(await p.inputValue('#projectName'), 'Cat', 'name after open');
+  await p.keyboard.press('Control+z');
+  eq([await p.inputValue('#projectName'), await p.evaluate(() => __pindou.S.name)], ['Frog', 'Frog'], 'name after undo');
+});
+test('switching palettes keeps the zoom', async (p) => {
+  await p.click('[data-action=zoom-in]'); await p.click('[data-action=zoom-in]');
+  const z = await p.evaluate(() => __pindou.S.view.scale);
+  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(100);
+  eq(await p.evaluate(() => __pindou.S.view.scale), z, 'zoom after switch');
+});
+test('Ctrl+Z works while the palette dropdown has focus', async (p) => {
+  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(100);
+  await p.focus('#paletteSelect'); await p.keyboard.press('Control+z'); await p.waitForTimeout(100);
+  eq(await p.evaluate(() => __pindou.S.paletteId), 'mard221', 'palette after Ctrl+Z');
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';
