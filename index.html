@@ -40,7 +40,7 @@
       <button class="tool" data-tool="eraser" title="Eraser (E)">⌫<span>Erase</span></button>
       <button class="tool" data-tool="fill" title="Fill (F)">▧<span>Fill</span></button>
       <button class="tool" data-tool="picker" title="Eyedropper (I)">⦿<span>Pick</span></button>
-      <button class="tool" data-tool="replace" title="Replace color (R): click a bead to swap every bead of that color for the current color">⇄<span>Swap</span></button>
+      <button class="tool" data-tool="replace" title="Swap color (R): click a bead to change every bead of that color in the whole design to the current color">⇄<span>Swap</span></button>
       <button class="tool" data-tool="pan" title="Pan (H) · or hold Space / middle-drag / two fingers">✋<span>Pan</span></button>
       <div class="current" title="Current color">
         <div id="currentSwatch" class="swatch big"></div>
@@ -167,8 +167,8 @@
       <p class="hint" id="newSummary"></p>
       <label class="check"><input type="checkbox" id="newKeep"> Keep current design (resize the canvas, anchored top-left)</label>
       <div class="dlg-actions">
-        <button value="cancel">Cancel</button>
         <button value="ok" class="primary">Create</button>
+        <button value="cancel" formnovalidate>Cancel</button>
       </div>
     </form>
   </dialog>
@@ -202,15 +202,15 @@
         </div>
       </div>
       <div class="dlg-actions">
-        <button value="cancel">Cancel</button>
         <button value="ok" class="primary" id="imgApply" disabled>Use pattern</button>
+        <button value="cancel" formnovalidate>Cancel</button>
       </div>
     </form>
   </dialog>
 
   <input type="file" id="openFile" accept=".json,application/json" hidden>
   <div id="printRoot" class="print-root"></div>
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><span id="toastText"></span><button id="toastClose" class="toast-close" type="button" hidden>Dismiss</button></div>
 
   <script src="js/palettes.js?v=0.2.1"></script>
   <script src="js/color.js?v=0.2.1"></script>

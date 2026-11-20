@@ -10,10 +10,24 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
   };
   const fmt = (n) => n.toLocaleString();
+  // Messages. The toast is a popover so it sits in the browser's top layer, above
+  // open dialogs, and role="status" makes screen readers announce it. Long messages
+  // stay longer; { sticky: true } (warnings, errors) stays until dismissed.
   let toastTimer;
-  function toast(msg) {
-    const t = $('#toast'); t.textContent = msg; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+  function toast(msg, opts = {}) {
+    const t = $('#toast');
+    $('#toastText').textContent = msg;
+    $('#toastClose').hidden = !opts.sticky;
+    if (t.showPopover) { try { if (t.matches(':popover-open')) t.hidePopover(); t.showPopover(); } catch { t.hidden = false; } }
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    if (!opts.sticky) toastTimer = setTimeout(hideToast, clamp(2500 + msg.length * 45, 2500, 9000));
+  }
+  function hideToast() {
+    const t = $('#toast');
+    clearTimeout(toastTimer);
+    if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } }
+    t.hidden = true;
   }
   function download(name, blobOrUrl) {
     const a = document.createElement('a');
@@ -107,21 +121,42 @@
   function sortedPalette(view) {
     return S.palette.slice().sort(PALETTE_VIEWS[view].sort);
   }
-  function setPalette(id, remapCells) {
-    const old = S.palette;
+  // Make `id` the active palette. This does NOT touch the design: callers hand
+  // applyState() cells that already refer to the new palette (see switchPalette).
+  function setPalette(id) {
+    const keep = S.palette[S.color] && S.palette[S.color].code;
     S.paletteId = id;
     S.palette = buildPalette(id);
     S.codeIndex = new Map(S.palette.map((c) => [c.code, c.i]));
     S.owned = new Set(store.get('pindou.owned.' + id, S.palette.map((c) => c.code)));
-    if (remapCells && old.length) {
-      const map = new Int16Array(old.length);
-      old.forEach((c, i) => { map[i] = S.codeIndex.has(c.code) ? S.codeIndex.get(c.code) : nearest(c.lab, allSolid()); });
-      for (let i = 0; i < S.cells.length; i++) if (S.cells[i] >= 0) S.cells[i] = map[S.cells[i]];
-      const cur = old[S.color];
-      S.color = cur && S.codeIndex.has(cur.code) ? S.codeIndex.get(cur.code) : 0;
-      S.undo = []; S.redo = [];
+    S.color = keep && S.codeIndex.has(keep) ? S.codeIndex.get(keep) : 0;
+    imgState.result = null; // a conversion made with the old palette must never be applied
+  }
+  // Switch palettes as one undoable step. Colors the new palette lacks are replaced
+  // by their nearest match, after asking, since that changes the design.
+  function switchPalette(id) {
+    if (id === S.paletteId) return;
+    const target = buildPalette(id);
+    const index = new Map(target.map((c) => [c.code, c.i]));
+    const solid = target.filter((c) => !c.transparent);
+    const used = countRegion();
+    const map = new Int16Array(S.palette.length);
+    const lost = []; let lostBeads = 0;
+    S.palette.forEach((c, i) => {
+      if (index.has(c.code)) { map[i] = index.get(c.code); return; }
+      let best = solid[0].i, bd = Infinity;
+      for (const t of solid) { const d = Color.deltaE2000(c.lab, t.lab); if (d < bd) { bd = d; best = t.i; } }
+      map[i] = best;
+      if (used[i]) { lost.push(c.code); lostBeads += used[i]; }
+    });
+    const name = PALETTES[id].name;
+    if (lost.length && !confirm(`${name} doesn't have ${lost.length} of the colors in this design (${lost.slice(0, 12).join(', ')}${lost.length > 12 ? ', …' : ''}).\n\nSwitching replaces those ${fmt(lostBeads)} beads with the closest ${name} colors. You can undo it afterwards.`)) {
+      $('#paletteSelect').value = S.paletteId;
+      return;
     }
-    if (!S.palette[S.color]) S.color = 0;
+    const cells = S.cells.map((v) => (v < 0 ? -1 : map[v]));
+    replaceState({ ...snapshot(), paletteId: id, cells },
+      lost.length ? `Switched to ${name}: ${fmt(lostBeads)} beads changed to the closest colors. Undo switches back.` : `Switched to ${name}`);
   }
   const allSolid = () => S.palette.filter((c) => !c.transparent).map((c) => c.i);
   function nearest(lab, candidates) {
@@ -339,32 +374,50 @@
   function endStroke() {
     const st = S.stroke; S.stroke = null;
     if (!st || !st.size) return;
-    const ch = [];
-    for (const [i, old] of st) if (S.cells[i] !== old) ch.push([i, old, S.cells[i]]);
-    if (ch.length) { pushUndo({ type: 'cells', ch }); changed(); }
+    const idx = [], olds = [];
+    for (const [i, old] of st) if (S.cells[i] !== old) { idx.push(i); olds.push(old); }
+    if (!idx.length) return;
+    // Typed arrays keep a whole-board fill to ~8 bytes per bead in the undo history.
+    const rec = { type: 'cells', idx: Int32Array.from(idx), old: Int16Array.from(olds), now: new Int16Array(idx.length) };
+    for (let k = 0; k < idx.length; k++) rec.now[k] = S.cells[idx[k]];
+    pushUndo(rec);
+    changed();
   }
   function cancelStroke() {
     if (!S.stroke) return;
     for (const [i, old] of S.stroke) { S.cells[i] = old; writePix(i); }
     S.stroke = null; pixDirty = true; requestDraw();
   }
-  function snapshot() { return { w: S.w, h: S.h, cells: S.cells.slice() }; }
+  // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
+  function snapshot() { return { paletteId: S.paletteId, tray: S.tray, w: S.w, h: S.h, cells: S.cells.slice() }; }
+  const UNDO_STEPS = 200, UNDO_BYTES = 64 * 1024 * 1024;
+  const recBytes = (r) => (r.type === 'cells' ? r.idx.length * 8 : (r.before.cells.length + r.after.cells.length) * 2);
   function pushUndo(rec) {
     S.undo.push(rec);
-    if (S.undo.length > 200) S.undo.shift();
     S.redo.length = 0;
+    let bytes = 0;
+    for (const r of S.undo) bytes += recBytes(r);
+    while (S.undo.length > 1 && (S.undo.length > UNDO_STEPS || bytes > UNDO_BYTES)) bytes -= recBytes(S.undo.shift());
+    updateUndoButtons();
   }
   function applyRec(rec, back) {
     if (rec.type === 'cells') {
-      for (const [i, o, n] of rec.ch) { S.cells[i] = back ? o : n; writePix(i); }
+      const src = back ? rec.old : rec.now;
+      for (let k = 0; k < rec.idx.length; k++) { S.cells[rec.idx[k]] = src[k]; writePix(rec.idx[k]); }
       pixDirty = true;
     } else {
-      loadGrid(back ? rec.before : rec.after);
+      applyState(back ? rec.before : rec.after);
+      refreshPanels();
     }
     changed();
   }
-  function undo() { const r = S.undo.pop(); if (!r) return; applyRec(r, true); S.redo.push(r); }
-  function redo() { const r = S.redo.pop(); if (!r) return; applyRec(r, false); S.undo.push(r); }
+  function undo() { const r = S.undo.pop(); if (!r) return; applyRec(r, true); S.redo.push(r); updateUndoButtons(); }
+  function redo() { const r = S.redo.pop(); if (!r) return; applyRec(r, false); S.undo.push(r); updateUndoButtons(); }
+  function updateUndoButtons() {
+    const u = $('[data-action=undo]'), r = $('[data-action=redo]');
+    if (u) u.disabled = !S.undo.length;
+    if (r) r.disabled = !S.redo.length;
+  }
 
   function loadGrid(g) {
     const dimsChanged = g.w !== S.w || g.h !== S.h;
@@ -373,11 +426,21 @@
     rebuildPixmap();
     if (dimsChanged) fitView();
   }
-  function replaceGrid(next, label) {
+  // Restore a whole-design state, switching palette and tray size if it needs them.
+  function applyState(st) {
+    if (st.paletteId && st.paletteId !== S.paletteId) {
+      setPalette(st.paletteId);
+      $('#paletteSelect').value = st.paletteId;
+      selectColor(S.color);
+    }
+    if (st.tray && st.tray !== S.tray) { S.tray = st.tray; S.focus = null; syncTraySelect(); }
+    loadGrid(st);
+  }
+  function replaceState(next, label) {
     const before = snapshot();
-    loadGrid(next);
+    applyState(next);
     pushUndo({ type: 'snap', before, after: snapshot() });
-    changed();
+    changed(); refreshPanels();
     fitView();
     if (label) toast(label);
   }
@@ -394,19 +457,21 @@
       if (e2 <= dx) { err += dx; y0 += sy; }
     }
   }
-  function floodFill(start, v) {
+  function floodFill(start, v, rect) {
     const target = S.cells[start];
     if (target === v) return;
+    const r = rect || { x: 0, y: 0, w: S.w, h: S.h };
+    const xMin = r.x, yMin = r.y, xMax = r.x + r.w - 1, yMax = r.y + r.h - 1;
     const stack = [start];
     while (stack.length) {
       const i = stack.pop();
       if (S.cells[i] !== target) continue;
       setCell(i, v);
       const x = i % S.w, y = (i / S.w) | 0;
-      if (x > 0) stack.push(i - 1);
-      if (x < S.w - 1) stack.push(i + 1);
-      if (y > 0) stack.push(i - S.w);
-      if (y < S.h - 1) stack.push(i + S.w);
+      if (x > xMin) stack.push(i - 1);
+      if (x < xMax) stack.push(i + 1);
+      if (y > yMin) stack.push(i - S.w);
+      if (y < yMax) stack.push(i + S.w);
     }
   }
   function replaceAll(target, v) {
@@ -447,8 +512,12 @@
     }
     if (!cell) { gesture = { kind: 'pan', x: p.x, y: p.y }; viewport.classList.add('panning'); return; }
     if (S.focus && !inFocus(cell)) return;
-    if (S.tool === 'fill' && !erase) { beginStroke(); floodFill(cell.i, S.color); endStroke(); requestDraw(); return; }
-    if (S.tool === 'replace' && !erase) { beginStroke(); replaceAll(S.cells[cell.i], S.color); endStroke(); requestDraw(); return; }
+    if ((S.tool === 'fill' || S.tool === 'replace') && !erase) {
+      // Act when the finger or button lifts. If a second finger lands first, this was
+      // the start of a pinch-zoom, so nothing changes.
+      gesture = { kind: 'tap', tool: S.tool, cell, id: e.pointerId };
+      return;
+    }
     const v = erase ? -1 : S.color;
     beginStroke(); setCell(cell.i, v);
     gesture = { kind: 'draw', v, last: cell };
@@ -480,9 +549,21 @@
       requestDraw();
     }
   });
+  function runTapTool(g) {
+    beginStroke();
+    if (g.tool === 'fill') floodFill(g.cell.i, S.color, S.focus ? trayRect(S.focus.r, S.focus.c) : null);
+    else replaceAll(S.cells[g.cell.i], S.color);
+    endStroke();
+    requestDraw();
+  }
   function endPointer(e) {
     pointers.delete(e.pointerId);
     if (!gesture) return;
+    if (gesture.kind === 'tap') {
+      const g = gesture; gesture = null;
+      if (e.type === 'pointerup' && g.id === e.pointerId && pointers.size === 0) runTapTool(g);
+      return;
+    }
     if (gesture.kind === 'draw') endStroke();
     if (gesture.kind === 'pinch' && pointers.size === 1) {
       const [p] = [...pointers.values()];
@@ -506,7 +587,7 @@
       zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, p.x, p.y);
     } else {
       // trackpad two-finger scroll / shift+wheel: pan
-      S.view.ox -= e.shiftKey ? e.deltaY : e.deltaX;
+      S.view.ox -= e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX; // browsers report shift+wheel as deltaX or deltaY
       S.view.oy -= e.shiftKey ? 0 : e.deltaY;
       requestDraw();
     }
@@ -522,8 +603,11 @@
     S.hover = cell;
     if ((prev && cell && prev.i === cell.i) || (!prev && !cell)) return;
     requestDraw();
-    const st = $('#status');
-    if (!cell) { st.textContent = `Pindou Studio v${VERSION}`; return; }
+    renderStatus();
+  }
+  function renderStatus() {
+    const st = $('#status'), cell = S.hover;
+    if (!cell || cell.i >= S.cells.length) { st.textContent = `Pindou Studio v${VERSION}`; return; }
     const r = Math.floor(cell.y / S.tray), c = Math.floor(cell.x / S.tray);
     const v = S.cells[cell.i];
     const bead = v >= 0 ? `${S.palette[v].code} ${S.palette[v].hex}${S.palette[v].transparent ? ' (clear)' : ''}` : 'empty';
@@ -571,6 +655,7 @@
   let panelTimer;
   function changed() {
     requestDraw();
+    renderStatus();
     clearTimeout(panelTimer);
     panelTimer = setTimeout(() => { refreshPanels(); autosave(); }, 120);
   }
@@ -691,28 +776,47 @@
     }
     return { format: 'pindou-studio', version: 1, name: S.name, palette: S.paletteId, tray: S.tray, w: S.w, h: S.h, legend, cells };
   }
-  function deserialize(d) {
-    if (!d || d.format !== 'pindou-studio' || !Array.isArray(d.cells)) throw new Error('Not a Pindou Studio project file');
-    const w = d.w | 0, h = d.h | 0;
-    if (w < 1 || h < 1 || w > MAX_DIM || h > MAX_DIM || d.cells.length !== w * h) throw new Error('Project size is invalid');
-    if (PALETTES[d.palette] && d.palette !== S.paletteId) setPalette(d.palette, false);
-    const map = d.legend.map((code) => {
-      if (S.codeIndex.has(code)) return S.codeIndex.get(code);
-      return -1;
-    });
-    const missing = d.legend.filter((code) => !S.codeIndex.has(code));
+  // Check a project file completely and turn it into a design state, without
+  // changing anything. Throws a readable error for anything malformed.
+  function parseProject(d) {
+    if (!d || typeof d !== 'object' || d.format !== 'pindou-studio') throw new Error("it isn't a Pindou Studio project file");
+    const { w, h } = d;
+    if (!Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || w > MAX_DIM || h > MAX_DIM) throw new Error('its size is invalid');
+    if (!Array.isArray(d.cells) || d.cells.length !== w * h) throw new Error("its beads don't match its size");
+    if (!Array.isArray(d.legend) || !d.legend.every((c) => typeof c === 'string')) throw new Error('its color list is missing or invalid');
+    const paletteId = Object.prototype.hasOwnProperty.call(PALETTES, d.palette) ? d.palette : S.paletteId;
+    const pal = paletteId === S.paletteId ? S.palette : buildPalette(paletteId);
+    const index = new Map(pal.map((c) => [c.code, c.i]));
+    const map = d.legend.map((code) => (index.has(code) ? index.get(code) : -1));
+    const missing = [...new Set(d.legend.filter((code) => !index.has(code)))];
     const cells = new Int16Array(w * h);
-    for (let i = 0; i < cells.length; i++) { const v = d.cells[i]; cells[i] = v >= 0 && v < map.length ? map[v] : -1; }
-    S.name = String(d.name || 'Untitled');
-    S.tray = clamp(d.tray | 0 || 52, 5, 300);
-    S.undo = []; S.redo = []; S.focus = null;
-    loadGrid({ w, h, cells });
+    for (let i = 0; i < cells.length; i++) {
+      const v = d.cells[i];
+      cells[i] = Number.isInteger(v) && v >= 0 && v < map.length ? map[v] : -1;
+    }
+    const tray = Number.isInteger(d.tray) ? clamp(d.tray, 5, 300) : 52;
+    const name = typeof d.name === 'string' && d.name.trim() ? d.name.slice(0, 200) : 'Untitled';
+    return { state: { paletteId, tray, w, h, cells }, name, missing };
+  }
+  // Load without an undo step (restoring the autosave at startup).
+  function loadProject(d) {
+    const { state, name, missing } = parseProject(d);
+    S.focus = null;
+    applyState(state);
+    S.name = name;
     return missing;
+  }
+  function saveProject() {
+    download(safeName(S.name) + '.pindou.json', new Blob([JSON.stringify(serialize())], { type: 'application/json' }));
   }
   let saveTimer;
   function autosave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => store.set('pindou.autosave', serialize()), 300);
+    saveTimer = setTimeout(flushAutosave, 300);
+  }
+  function flushAutosave() {
+    clearTimeout(saveTimer);
+    store.set('pindou.autosave', serialize());
   }
 
   // ---------- rendering for export / print ----------
@@ -865,6 +969,9 @@
     $('#imgOwned').disabled = S.owned.size === 0;
     tp.sel = null; tp.hover = null;
     dlg.showModal();
+    // Always start from a fresh conversion with the current palette and settings.
+    if (imgState.img) runConvert();
+    else { imgState.result = null; $('#imgApply').disabled = true; }
     drawTrayPicker();
   }
 
@@ -1055,6 +1162,7 @@
     }
   }
   function runConvert() {
+    clearTimeout(imgState.timer); imgState.timer = null;
     if (!imgState.img) return;
     const w = clamp(+$('#imgW').value | 0, 1, MAX_DIM), h = clamp(+$('#imgH').value | 0, 1, MAX_DIM);
     const res = convert({
@@ -1084,8 +1192,14 @@
 
   // ---------- new / resize ----------
   function openNewDialog() {
-    const T0 = S.tray;
-    $('#newTray').value = [52, 72, 78, 104].includes(T0) ? String(T0) : '52';
+    const nt = $('#newTray');
+    nt.querySelectorAll('option[data-custom]').forEach((o) => o.remove());
+    if (![...nt.options].some((o) => o.value === String(S.tray))) {
+      const o = document.createElement('option');
+      o.dataset.custom = '1'; o.value = String(S.tray); o.textContent = `${S.tray} × ${S.tray}`;
+      nt.appendChild(o);
+    }
+    nt.value = String(S.tray);
     $('#newAcross').value = traysAcross(); $('#newDown').value = traysDown();
     $('#newW').value = S.w; $('#newH').value = S.h;
     $('#newKeep').checked = false;
@@ -1098,15 +1212,18 @@
   }
 
   // ---------- wiring ----------
-  function setTraySize(n) {
-    S.tray = n;
-    const sel = $('#traySize');
-    if ([...sel.options].some((o) => o.value === String(n))) sel.value = String(n);
-    else {
+  function syncTraySelect() {
+    const sel = $('#traySize'), n = S.tray;
+    if (![...sel.options].some((o) => o.value === String(n))) {
       let o = sel.querySelector('option[data-custom]');
       if (!o) { o = document.createElement('option'); o.dataset.custom = '1'; sel.insertBefore(o, sel.lastElementChild); }
-      o.value = String(n); o.textContent = `${n} × ${n}`; sel.value = String(n);
+      o.value = String(n); o.textContent = `${n} × ${n}`;
     }
+    sel.value = String(n);
+  }
+  function setTraySize(n) {
+    S.tray = n;
+    syncTraySelect();
     S.focus = null;
     changed(); refreshPanels(); requestDraw();
   }
@@ -1123,7 +1240,7 @@
         case 'new': openNewDialog(); break;
         case 'import-image': openImageDialog(); break;
         case 'open': $('#openFile').click(); break;
-        case 'save': download(safeName(S.name) + '.pindou.json', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); break;
+        case 'save': saveProject(); break;
         case 'toggle-export': menu.hidden = !menu.hidden; b.setAttribute('aria-expanded', String(!menu.hidden)); break;
         case 'export-png': exportPng(); break;
         case 'export-csv': exportCsv(); break;
@@ -1140,6 +1257,7 @@
     });
     $$('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
+    $('#toastClose').addEventListener('click', hideToast);
     $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; autosave(); });
 
     $('#traySize').addEventListener('change', (e) => {
@@ -1164,11 +1282,7 @@
       const o = document.createElement('option'); o.value = id; o.textContent = p.name; ps.appendChild(o);
     }
     ps.value = S.paletteId;
-    ps.addEventListener('change', () => {
-      setPalette(ps.value, true);
-      rebuildPixmap(); selectColor(S.color); changed(); refreshPanels();
-      toast(`Switched to ${PALETTES[ps.value].name}`);
-    });
+    ps.addEventListener('change', () => switchPalette(ps.value));
     const pv = $('#paletteView');
     for (const [id, v] of Object.entries(PALETTE_VIEWS)) {
       const o = document.createElement('option'); o.value = id; o.textContent = v.label; pv.appendChild(o);
@@ -1210,12 +1324,17 @@
     $('#openFile').addEventListener('change', async (e) => {
       const f = e.target.files[0]; e.target.value = '';
       if (!f) return;
-      try {
-        const missing = deserialize(JSON.parse(await f.text()));
-        $('#projectName').value = S.name; $('#paletteSelect').value = S.paletteId;
-        setTraySize(S.tray); selectColor(S.color); fitView(); refreshPanels(); autosave();
-        toast(missing.length ? `Opened. Codes not in this palette were left empty: ${missing.join(', ')}` : `Opened ${S.name}`);
-      } catch (err) { toast('Could not open: ' + err.message); }
+      let parsed;
+      try { parsed = parseProject(JSON.parse(await f.text())); }
+      catch (err) { toast(`Couldn't open ${f.name}: ${err.message}. Your current design wasn't changed.`, { sticky: true }); return; }
+      const { state, name, missing } = parsed;
+      S.focus = null;
+      replaceState(state, missing.length ? null : `Opened ${name}. Undo brings back the previous design.`);
+      S.name = name; $('#projectName').value = name;
+      if (missing.length) {
+        toast(`Opened ${name}, but ${missing.length} color code${missing.length > 1 ? 's' : ''} aren't in ${PALETTES[state.paletteId].name} and were left empty: ${missing.join(', ')}. Undo brings back the previous design.`, { sticky: true });
+      }
+      autosave();
     });
 
     // new dialog
@@ -1230,8 +1349,8 @@
       const cells = new Int16Array(w * h).fill(-1);
       if (keep) for (let y = 0; y < Math.min(h, S.h); y++) for (let x = 0; x < Math.min(w, S.w); x++) cells[y * w + x] = S.cells[y * S.w + x];
       S.focus = null;
-      setTraySize(+$('#newTray').value);
-      replaceGrid({ w, h, cells }, keep ? `Resized to ${w}×${h}` : `New ${w}×${h} design (Undo brings back the old one)`);
+      replaceState({ paletteId: S.paletteId, tray: +$('#newTray').value, w, h, cells },
+        keep ? `Resized to ${w}×${h}. Undo brings back the previous size.` : `New ${w}×${h} design. Undo brings back the old one.`);
       if (!keep) { S.name = 'Untitled'; $('#projectName').value = S.name; }
     });
 
@@ -1247,7 +1366,10 @@
         if (+$('#imgH').value > MAX_DIM) { $('#imgH').value = MAX_DIM; syncImgDims('h'); }
         scheduleConvert();
       };
-      img.onerror = () => toast('That file could not be read as an image');
+      img.onerror = () => {
+        $('#imgStats').textContent = "That file couldn't be read as an image. Try a PNG, JPEG, GIF or WebP.";
+        toast("That file couldn't be read as an image.", { sticky: true });
+      };
       img.src = URL.createObjectURL(f);
     });
     $('#imgW').addEventListener('input', () => { syncImgDims('w'); scheduleConvert(); });
@@ -1274,18 +1396,23 @@
       }
     });
     idlg.addEventListener('close', () => {
-      if (idlg.returnValue !== 'ok' || !imgState.result) return;
+      if (idlg.returnValue !== 'ok') return;
+      if (imgState.timer) runConvert(); // a setting changed moments ago: use it, not the previous result
+      if (!imgState.result) return;
       S.focus = null;
-      replaceGrid(imgState.result, 'Pattern created. Undo restores the previous design.');
+      replaceState({ paletteId: S.paletteId, tray: S.tray, ...imgState.result }, 'Pattern created. Undo brings back the previous design.');
     });
 
     // keyboard
     window.addEventListener('keydown', (e) => {
-      if (e.target.closest('input, select, textarea, dialog')) return;
       const k = e.key.toLowerCase();
+      // Ctrl+S saves the project from anywhere, including while typing its name.
+      if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
+      if (e.target.closest('input, select, textarea, dialog')) return;
+      // Let Space press whatever button, tab or link has focus.
+      if (e.key === ' ' && e.target.closest('button, a, [role=tab], [role=slider], [tabindex]:not(#viewport)')) return;
       if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
       if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return; }
-      if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); download(safeName(S.name) + '.pindou.json', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); return; }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === ' ') { if (!spaceDown) { spaceDown = true; viewport.classList.add('pan'); } e.preventDefault(); return; }
       const tools = { p: 'pencil', b: 'pencil', e: 'eraser', f: 'fill', g: 'fill', i: 'picker', r: 'replace', h: 'pan' };
@@ -1302,6 +1429,9 @@
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
+    // Write the autosave right away when the tab is hidden or closed, not 0.4 s later.
+    window.addEventListener('pagehide', flushAutosave);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAutosave(); });
   }
 
   function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview }); }
@@ -1313,11 +1443,7 @@
     const meta = document.querySelector('meta[name="pindou-version"]');
     const page = meta ? meta.content : 'unknown';
     if (page === VERSION) return;
-    const t = $('#toast');
-    t.textContent = `Pindou Studio was updated, but your browser mixed old and new files (page ${page}, script ${VERSION}). Press Ctrl+Shift+R to reload fully. Your design is safe.`;
-    t.hidden = false;
-    t.style.cursor = 'pointer';
-    t.onclick = () => { t.hidden = true; };
+    toast(`Pindou Studio was updated, but your browser mixed old and new files (page ${page}, script ${VERSION}). Press Ctrl+Shift+R to reload fully. Your design is safe.`, { sticky: true });
   }
 
   function boot() {
@@ -1329,11 +1455,11 @@
     if (prefs.pview && PALETTE_VIEWS[prefs.pview]) S.pview = prefs.pview;
     $('#guides').value = String(S.guides); $('#showCodes').checked = S.showCodes; $('#roundBeads').checked = S.round;
 
-    setPalette(S.paletteId, false);
+    setPalette(S.paletteId);
     bind();
     const saved = store.get('pindou.autosave', null);
     let restored = false;
-    if (saved) { try { deserialize(saved); restored = true; } catch { /* ignore bad autosave */ } }
+    if (saved) { try { loadProject(saved); restored = true; } catch { /* unreadable autosave: start fresh */ } }
     if (!restored) rebuildPixmap();
     $('#projectName').value = S.name;
     $('#paletteSelect').value = S.paletteId;
@@ -1344,11 +1470,12 @@
     resizeCanvas();
     fitView();
     refreshPanels();
+    updateUndoButtons();
     $('#status').textContent = `Pindou Studio v${VERSION}`;
     checkVersion();
   }
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, deserialize, countRegion, undo, redo, imgState, runConvert };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert };
   boot();
 })();

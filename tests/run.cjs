@@ -1,0 +1,312 @@
+#!/usr/bin/env node
+// Browser tests for Pindou Studio.
+//
+//   node tests/run.cjs            # run everything
+//   node tests/run.cjs pinch      # only tests whose name contains "pinch"
+//
+// Needs Node and Playwright with Chromium (npm i -D playwright && npx playwright install chromium).
+// Serves the repo itself with a tiny built-in static server, so no Python is needed.
+'use strict';
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { chromium, devices } = require('playwright');
+
+const ROOT = path.resolve(__dirname, '..');
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+
+function serve() {
+  const server = http.createServer((req, res) => {
+    const url = decodeURIComponent(req.url.split('?')[0]);
+    const file = path.join(ROOT, url === '/' ? 'index.html' : url);
+    if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
+    fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404).end(); return; }
+      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      res.end(data);
+    });
+  });
+  return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok(server)));
+}
+
+const tests = [];
+const test = (name, fn, opts) => tests.push({ name, fn, opts });
+const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+const eq = (a, b, msg) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+
+// ---------- helpers ----------
+async function open(browser, base, opts = {}) {
+  const ctx = await browser.newContext(opts);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base + '/');
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.waitForFunction(() => window.__pindou);
+  page.errors = errors;
+  page.ctx = ctx;
+  return page;
+}
+const beads = (p) => p.evaluate(() => __pindou.S.cells.filter((v) => v >= 0).length);
+async function cellPoint(p, x, y) {
+  const box = await p.locator('#viewport').boundingBox();
+  const v = await p.evaluate(() => ({ ...__pindou.S.view }));
+  return [box.x + v.ox + (x + 0.5) * v.scale, box.y + v.oy + (y + 0.5) * v.scale];
+}
+async function newDesign(p, { across = 1, down = 1 } = {}) {
+  await p.click('[data-action=new]');
+  await p.fill('#newAcross', String(across)); await p.dispatchEvent('#newAcross', 'input');
+  await p.fill('#newDown', String(down)); await p.dispatchEvent('#newDown', 'input');
+  await p.click('#newDialog button[value=ok]');
+  await p.waitForTimeout(100);
+}
+async function makeImage(p, w, h) {
+  const url = await p.evaluate(([w, h]) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); const gr = g.createLinearGradient(0, 0, w, h);
+    gr.addColorStop(0, '#ff2a8a'); gr.addColorStop(0.5, '#f7c948'); gr.addColorStop(1, '#21c5c4');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h); return c.toDataURL();
+  }, [w, h]);
+  return { name: 'test.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') };
+}
+async function openFile(p, obj) {
+  const text = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  await p.setInputFiles('#openFile', { name: 'x.pindou.json', mimeType: 'application/json', buffer: Buffer.from(text) });
+  await p.waitForTimeout(250);
+}
+async function pinch(p, cx, cy) {
+  const cdp = await p.ctx.newCDPSession(p);
+  const send = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts });
+  await send('touchStart', [{ x: cx - 20, y: cy, id: 1 }]);
+  await send('touchStart', [{ x: cx - 20, y: cy, id: 1 }, { x: cx + 20, y: cy, id: 2 }]);
+  await send('touchMove', [{ x: cx - 60, y: cy, id: 1 }, { x: cx + 60, y: cy, id: 2 }]);
+  await send('touchEnd', []);
+  await p.waitForTimeout(150);
+}
+
+// ---------- smoke ----------
+test('smoke: draw, fill, undo/redo, save round trip', async (p) => {
+  await p.mouse.move(...await cellPoint(p, 2, 2)); await p.mouse.down();
+  await p.mouse.move(...await cellPoint(p, 20, 2), { steps: 5 }); await p.mouse.up();
+  const stroke = await beads(p); assert(stroke === 19, `stroke placed ${stroke}`);
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 30, 30));
+  eq(await beads(p), 52 * 52, 'fill');
+  await p.keyboard.press('Control+z'); eq(await beads(p), 19, 'undo');
+  await p.keyboard.press('Control+Shift+z'); eq(await beads(p), 52 * 52, 'redo');
+  const same = await p.evaluate(() => { const a = JSON.stringify(__pindou.serialize()); __pindou.loadProject(JSON.parse(a)); return a === JSON.stringify(__pindou.serialize()); });
+  assert(same, 'save/open round trip changed the design');
+});
+test('smoke: image import applies', async (p) => {
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 120, 60));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await p.click('#imgApply'); await p.waitForTimeout(150);
+  eq(await p.evaluate(() => [__pindou.S.w, __pindou.S.h]), [52, 26], 'imported size');
+});
+test('smoke: phone width has no horizontal scroll', async (p) => {
+  await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(100);
+  assert(!(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)), 'page scrolls sideways');
+});
+test('smoke: version is consistent', async (p) => {
+  const v = await p.evaluate(() => [__pindou.VERSION, document.querySelector('meta[name=pindou-version]').content, [...document.querySelectorAll('script[src],link[rel=stylesheet]')].map((e) => (e.src || e.href).split('?v=')[1])]);
+  assert(v[0] === v[1] && v[2].every((x) => x === v[0]), `version mismatch ${JSON.stringify(v)}`);
+});
+
+// ---------- regressions from the pre-1.0 review ----------
+test('pinch-zoom with Fill selected changes nothing', async (p) => {
+  await p.click('[data-tool=fill]');
+  const box = await p.locator('#viewport').boundingBox();
+  await pinch(p, box.x + box.width / 2, box.y + box.height / 2);
+  eq(await beads(p), 0, 'beads after pinch with Fill');
+}, { ...devices['iPad Mini'] });
+test('pinch-zoom with Swap selected changes nothing', async (p) => {
+  await p.evaluate(() => { __pindou.S.cells.fill(__pindou.S.codeIndex.get('A1')); });
+  await p.click('[data-tool=replace]');
+  const box = await p.locator('#viewport').boundingBox();
+  await pinch(p, box.x + box.width / 2, box.y + box.height / 2);
+  eq(await p.evaluate(() => __pindou.S.cells.every((v) => v === __pindou.S.codeIndex.get('A1'))), true, 'cells unchanged');
+}, { ...devices['iPad Mini'] });
+test('a single tap with Fill still fills (touch)', async (p) => {
+  await p.click('[data-tool=fill]');
+  const [x, y] = await cellPoint(p, 10, 10);
+  await p.touchscreen.tap(x, y); await p.waitForTimeout(100);
+  eq(await beads(p), 52 * 52, 'beads after tap');
+}, { ...devices['iPad Mini'] });
+test('fill stays inside the focused tray', async (p) => {
+  await newDesign(p, { across: 2 });
+  await p.click('[role=tab][data-tab=trays]'); await p.click('.tray-cell >> nth=0');
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 10, 10));
+  eq(await beads(p), 52 * 52, 'beads after fill in focused tray');
+});
+test('Space presses a focused button', async (p) => {
+  await p.focus('[data-tool=fill]'); await p.keyboard.press(' ');
+  eq(await p.evaluate(() => __pindou.S.tool), 'fill', 'tool after Space');
+  await p.focus('[role=tab][data-tab=counts]'); await p.keyboard.press(' ');
+  eq(await p.getAttribute('[role=tab][data-tab=counts]', 'aria-selected'), 'true', 'Counts tab after Space');
+});
+test('Enter in the New dialog creates the design', async (p) => {
+  await p.click('[data-action=new]');
+  await p.fill('#newW', '30'); await p.dispatchEvent('#newW', 'input'); await p.press('#newW', 'Enter');
+  await p.waitForTimeout(150);
+  eq(await p.evaluate(() => __pindou.S.w), 30, 'width after Enter');
+});
+test('Enter in the image dialog uses the pattern', async (p) => {
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 40, 40));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await p.fill('#imgW', '20'); await p.dispatchEvent('#imgW', 'input'); await p.press('#imgW', 'Enter');
+  await p.waitForTimeout(400);
+  eq(await p.evaluate(() => [__pindou.S.w, __pindou.S.h]), [20, 20], 'size after Enter');
+});
+test('Ctrl+S saves even while typing the project name', async (p) => {
+  await p.focus('#projectName');
+  const [dl] = await Promise.all([p.waitForEvent('download', { timeout: 3000 }), p.keyboard.press('Control+s')]);
+  assert(dl.suggestedFilename().endsWith('.pindou.json'), 'no project download');
+});
+test('a malformed file leaves the current design intact and saveable', async (p) => {
+  await p.selectOption('#paletteSelect', 'mard291');
+  await p.evaluate(() => { const S = __pindou.S; S.cells[0] = S.codeIndex.get('R2'); });
+  await openFile(p, { format: 'pindou-studio', palette: 'mard221', w: 2, h: 1, cells: [0, 0] });
+  eq(await p.evaluate(() => [__pindou.S.paletteId, __pindou.S.w, __pindou.S.palette[__pindou.S.cells[0]].code]), ['mard291', 52, 'R2'], 'state after bad file');
+  await p.evaluate(() => __pindou.serialize());
+  eq(p.errors, [], 'page errors');
+});
+test('non-integer cell values load as empty', async (p) => {
+  await openFile(p, { format: 'pindou-studio', version: 1, palette: 'mard221', w: 4, h: 1, legend: ['A1', 'B5'], cells: [0.5, true, '0', null] });
+  eq(await p.evaluate(() => [...__pindou.S.cells]), [-1, -1, -1, -1], 'cells');
+});
+test('opening a file can be undone', async (p) => {
+  await p.evaluate(() => { __pindou.S.cells[5] = 3; });
+  await openFile(p, { format: 'pindou-studio', version: 1, palette: 'mard221', w: 2, h: 1, legend: ['A1'], cells: [0, 0] });
+  eq(await p.evaluate(() => __pindou.S.w), 2, 'opened');
+  await p.keyboard.press('Control+z');
+  eq(await p.evaluate(() => [__pindou.S.w, __pindou.S.cells[5]]), [52, 3], 'after undo');
+});
+test('switching palettes can be undone without losing colors', async (p) => {
+  p.on('dialog', (d) => d.accept());
+  await p.selectOption('#paletteSelect', 'mard291');
+  await p.evaluate(() => { const S = __pindou.S; S.cells[0] = S.codeIndex.get('P1'); S.cells[1] = S.codeIndex.get('ZG8'); });
+  await p.selectOption('#paletteSelect', 'mard221');
+  await p.keyboard.press('Control+z');
+  eq(await p.evaluate(() => [__pindou.S.paletteId, __pindou.S.palette[__pindou.S.cells[0]].code, __pindou.S.palette[__pindou.S.cells[1]].code, document.querySelector('#paletteSelect').value]), ['mard291', 'P1', 'ZG8', 'mard291'], 'after undo');
+});
+test('a lossy palette switch asks first, and Cancel keeps everything', async (p) => {
+  await p.selectOption('#paletteSelect', 'mard291');
+  await p.evaluate(() => { __pindou.S.cells[0] = __pindou.S.codeIndex.get('P1'); });
+  let asked = false; p.once('dialog', (d) => { asked = true; d.dismiss(); });
+  await p.selectOption('#paletteSelect', 'mard221'); await p.waitForTimeout(100);
+  assert(asked, 'no confirmation');
+  eq(await p.evaluate(() => [__pindou.S.paletteId, document.querySelector('#paletteSelect').value]), ['mard291', 'mard291'], 'after cancel');
+});
+test('reopening the image dialog after a palette switch cannot apply a stale result', async (p) => {
+  p.on('dialog', (d) => d.accept());
+  await p.selectOption('#paletteSelect', 'mard291');
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 20, 20));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await p.click('#imgApply'); await p.waitForTimeout(100);
+  await p.selectOption('#paletteSelect', 'mard221');
+  await p.click('[data-action=import-image]');
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await p.click('#imgApply'); await p.waitForTimeout(150);
+  eq(await p.evaluate(() => __pindou.S.cells.filter((v) => v >= __pindou.S.palette.length).length), 0, 'cells past the palette');
+  eq(p.errors, [], 'page errors');
+});
+test('clicking Use pattern right after a change applies the new settings', async (p) => {
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 40, 40));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await p.fill('#imgW', '20'); await p.dispatchEvent('#imgW', 'input');
+  await p.evaluate(() => document.querySelector('#imgApply').click());
+  await p.waitForTimeout(400);
+  eq(await p.evaluate(() => [__pindou.S.w, __pindou.S.h]), [20, 20], 'applied size');
+});
+test('a custom tray size survives resize and undo', async (p) => {
+  p.on('dialog', (d) => d.accept('29'));
+  await p.selectOption('#traySize', 'custom'); await p.waitForTimeout(100);
+  eq(await p.evaluate(() => __pindou.S.tray), 29, 'custom tray');
+  await p.click('[data-action=new]'); await p.check('#newKeep');
+  await p.fill('#newW', '60'); await p.dispatchEvent('#newW', 'input');
+  await p.click('#newDialog button[value=ok]'); await p.waitForTimeout(100);
+  eq(await p.evaluate(() => __pindou.S.tray), 29, 'tray after resize');
+  await p.keyboard.press('Control+z');
+  eq(await p.evaluate(() => [__pindou.S.tray, __pindou.S.w]), [29, 52], 'after undo');
+});
+test('autosave is written when the page is hidden', async (p) => {
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
+  await p.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave') || 'null'));
+  assert(saved && saved.cells.filter((v) => v >= 0).length === 52 * 52, 'autosave not flushed');
+});
+test('code labels use the more readable of black or white', async (p) => {
+  const bad = await p.evaluate(() => {
+    const lum = (hex) => { const c = hex.match(/\w\w/g).map((h) => parseInt(h, 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    return __pindou.S.palette.filter((c) => !c.transparent).filter((c) => {
+      const L = lum(c.hex); const black = ratio(L, lum('111111')), white = ratio(L, 1);
+      return (c.text === '#fff' ? white : black) < Math.max(black, white) - 1e-9;
+    }).map((c) => c.code);
+  });
+  eq(bad, [], 'colors with the less readable label');
+});
+test('messages show above an open dialog and are announced', async (p) => {
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', { name: 'x.png', mimeType: 'image/png', buffer: Buffer.from('not an image') });
+  await p.waitForTimeout(300);
+  const st = await p.evaluate(() => { const t = document.querySelector('#toast'); const r = t.getBoundingClientRect();
+    return { role: t.getAttribute('role'), top: document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#toast') === t }; });
+  eq(st, { role: 'status', top: true }, 'toast state');
+});
+test('browser print (Ctrl+P) gets the pattern sheets', async (p) => {
+  await p.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await p.waitForTimeout(300);
+  assert(await p.evaluate(() => document.querySelectorAll('#printRoot .sheet').length) >= 1, 'no sheets before print');
+});
+test('choosing a tray by keyboard keeps focus on the tray', async (p) => {
+  await newDesign(p, { across: 2 });
+  await p.click('[role=tab][data-tab=trays]');
+  await p.focus('.tray-cell >> nth=1'); await p.keyboard.press('Enter'); await p.waitForTimeout(150);
+  eq(await p.evaluate(() => [document.activeElement.classList.contains('tray-cell'), [...document.querySelectorAll('.tray-cell')].indexOf(document.activeElement)]), [true, 1], 'focus');
+});
+test('export menu closes on Escape and reports its state', async (p) => {
+  await p.click('[data-action=toggle-export]');
+  eq(await p.getAttribute('[data-action=toggle-export]', 'aria-expanded'), 'true', 'open');
+  await p.keyboard.press('Escape');
+  eq(await p.evaluate(() => [document.querySelector('#exportMenu').hidden, document.querySelector('[data-action=toggle-export]').getAttribute('aria-expanded')]), [true, 'false'], 'after Escape');
+  await p.click('[data-action=toggle-export]'); await p.mouse.click(5, 300);
+  eq(await p.getAttribute('[data-action=toggle-export]', 'aria-expanded'), 'false', 'after outside click');
+});
+test('icon-only buttons have spoken names', async (p) => {
+  const unnamed = await p.evaluate(() => [...document.querySelectorAll('button')].filter((b) => {
+    const name = (b.getAttribute('aria-label') || b.textContent).trim();
+    return !/[A-Za-z]{2,}|^[A-Z]{1,2}\d+$/.test(name); // a word, or a bead code like H7 / ZG3
+  }).map((b) => b.outerHTML.slice(0, 60)));
+  eq(unnamed, [], 'buttons without a word in their name');
+});
+test('bead counts can be chosen from the keyboard', async (p) => {
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
+  await p.click('[role=tab][data-tab=counts]');
+  const n = await p.evaluate(() => document.querySelectorAll('#countBody button').length);
+  assert(n >= 1, 'count rows are not buttons');
+});
+
+// ---------- runner ----------
+(async () => {
+  const filter = process.argv[2] || '';
+  const server = await serve();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch();
+  let failed = 0, ran = 0;
+  for (const t of tests) {
+    if (filter && !t.name.includes(filter)) continue;
+    ran++;
+    const page = await open(browser, base, t.opts || {});
+    try { await t.fn(page); console.log('  ✓ ' + t.name); }
+    catch (e) { failed++; console.log('  ✗ ' + t.name + '\n      ' + e.message.split('\n')[0]); }
+    finally { await page.ctx.close(); }
+  }
+  await browser.close(); server.close();
+  console.log(`\n${ran - failed}/${ran} passed`);
+  process.exit(failed ? 1 : 0);
+})();
