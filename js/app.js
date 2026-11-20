@@ -707,10 +707,11 @@
   // How many notches an event is. Chrome's wheelDeltaY counts raw notches (120 each) whatever
   // the page zoom, scroll setting or macOS acceleration; deltaY in pixels doesn't.
   function wheelNotches(e, mode) {
-    if (mode === 1) return e.deltaY / 3;        // Firefox: 3 lines a notch
-    if (mode === 2) return e.deltaY;            // pages
     const wd = e.wheelDeltaY;
-    if (typeof wd === 'number' && wd !== 0 && wd % 120 === 0) return -wd / 120;
+    // wheelDeltaY is 120 a notch (and part-notches for high-resolution wheels) in every mode
+    if (typeof wd === 'number' && wd !== 0 && mode !== 2) return -wd / 120;
+    if (mode === 1) return e.deltaY / 3;        // Firefox without wheelDeltaY: 3 lines a notch
+    if (mode === 2) return e.deltaY;            // pages
     return e.deltaY / 100;
   }
   viewport.addEventListener('wheel', (e) => {
@@ -731,9 +732,11 @@
       // part-notches zoom proportionally less
       zoomAt(Math.pow(1.2, -clamp(wheelNotches(e, mode), -3, 3)), p.x, p.y);
     } else {
-      // trackpad two-finger scroll / shift+wheel: pan
-      S.view.ox -= e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX; // browsers report shift+wheel as deltaX or deltaY
-      S.view.oy -= e.shiftKey ? 0 : e.deltaY;
+      // trackpad two-finger scroll / shift+wheel: pan. Firefox reports wheels in lines (this
+      // handler reads deltaMode first, see above): about 19 px a line, as Firefox itself uses.
+      const k = mode === 1 ? 19 : mode === 2 ? vh : 1;
+      S.view.ox -= k * (e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX); // browsers report shift+wheel as deltaX or deltaY
+      S.view.oy -= k * (e.shiftKey ? 0 : e.deltaY);
       requestDraw();
     }
   }, { passive: false });
