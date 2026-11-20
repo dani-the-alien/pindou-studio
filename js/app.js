@@ -207,7 +207,9 @@
     const auto = store.get('pindou.autosave', null);
     const old221 = store.get('pindou.owned.mard221', null), old291 = store.get('pindou.owned.mard291', null);
     if (!auto && !Array.isArray(old221) && !Array.isArray(old291)) return new Set(all); // new here: all 291
-    const last = auto && auto.palette === 'mard291' ? 'mard291' : 'mard221';
+    const known = auto && (auto.palette === 'mard221' || auto.palette === 'mard291') ? auto.palette : null;
+    // no readable autosave: whichever collection was saved (221's first), else MARD 221
+    const last = known || (Array.isArray(old221) ? 'mard221' : Array.isArray(old291) ? 'mard291' : 'mard221');
     const saved = last === 'mard291' ? old291 : old221;
     const set = Array.isArray(saved) ? saved.filter((c) => typeof c === 'string')
       : last === 'mard291' ? all : PALETTES[S.paletteId].colors.filter((c) => c.in221).map((c) => c.code);

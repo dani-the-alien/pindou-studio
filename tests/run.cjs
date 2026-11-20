@@ -206,16 +206,18 @@ async function asBefore14(p, storage) { // reload as the first load of this vers
   return p.evaluate(() => [...__pindou.S.owned].sort());
 }
 test('My collection carries over from before 1.4, and has a 221-set preset', async (p) => {
-  const auto = (palette) => ({ format: 'pindou-studio', version: 1, name: 'x', palette, tray: 52, w: 1, h: 1, legend: [], cells: [-1] });
+  const auto = (palette) => ({ format: 'pindou-studio', version: 1, name: 'x', palette, tray: 52, w: 52, h: 52, legend: [], cells: new Array(52 * 52).fill(-1) });
   eq(await asBefore14(p, { 'pindou.autosave': auto('mard291'), 'pindou.owned.mard221': ['A1', 'A2'], 'pindou.owned.mard291': ['P1'] }), ['P1'], 'the last palette\'s saved collection');
   eq((await asBefore14(p, { 'pindou.autosave': auto('mard221') })).length, 221, 'never customised on MARD 221: the 221 set');
   eq((await asBefore14(p, { 'pindou.autosave': auto('mard221'), 'pindou.owned.mard291': ['P1'] })).length, 221, 'on MARD 221 with only a 291 list saved: the 221 set');
   eq((await asBefore14(p, { 'pindou.autosave': auto('mard291') })).length, 291, 'never customised on MARD 291: all');
   eq((await asBefore14(p, {})).length, 291, 'new here: all');
+  eq(await asBefore14(p, { 'pindou.owned.mard291': ['P1'] }), ['P1'], 'no readable autosave: the collection that was saved');
   // kept, so it doesn't change once the autosave is rewritten
   await p.reload(); await p.waitForFunction(() => window.__pindou);
   await asBefore14(p, { 'pindou.autosave': auto('mard221') });
   await p.evaluate(() => { __pindou.tab.state = 'editing'; __pindou.tab.editing = true; }); await stroke(p, 2); await p.waitForTimeout(500);
+  eq(await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')).palette), 'mard291', 'autosave rewritten before the reload');
   await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
   eq(await p.evaluate(() => __pindou.S.owned.size), 221, 'after the autosave is rewritten');
   await p.check('#editOwned'); await p.click('#ownAll');
