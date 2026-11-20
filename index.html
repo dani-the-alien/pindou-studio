@@ -13,7 +13,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true"></span>
-      <input id="projectName" class="project-name" value="Untitled" aria-label="Project name" spellcheck="false">
+      <input id="projectName" class="project-name" value="Untitled" aria-label="Project name" title="Project name: click to rename" spellcheck="false">
     </div>
     <nav class="top-actions">
       <button data-action="new" title="New project">New</button>
@@ -36,20 +36,20 @@
 
   <main class="workspace">
     <aside class="toolbar" aria-label="Tools">
-      <button class="tool" data-tool="pencil" title="Pencil (P) · right-click erases">✎<span>Pencil</span></button>
-      <button class="tool" data-tool="eraser" title="Eraser (E)">⌫<span>Erase</span></button>
-      <button class="tool" data-tool="fill" title="Fill (F)">▧<span>Fill</span></button>
-      <button class="tool" data-tool="picker" title="Eyedropper (I)">⦿<span>Pick</span></button>
-      <button class="tool" data-tool="replace" title="Swap color (R): click a bead to change every bead of that color in the whole design to the current color">⇄<span>Swap</span></button>
-      <button class="tool" data-tool="pan" title="Pan (H) · or hold Space / middle-drag / two fingers">✋<span>Pan</span></button>
+      <button class="tool" data-tool="pencil" aria-label="Pencil" title="Pencil (P) · right-click erases">✎<span>Pencil</span></button>
+      <button class="tool" data-tool="eraser" aria-label="Eraser" title="Eraser (E)">⌫<span>Erase</span></button>
+      <button class="tool" data-tool="fill" aria-label="Fill" title="Fill (F)">▧<span>Fill</span></button>
+      <button class="tool" data-tool="picker" aria-label="Eyedropper" title="Eyedropper (I)">⦿<span>Pick</span></button>
+      <button class="tool" data-tool="replace" aria-label="Swap color" title="Swap color (R): click a bead to change every bead of that color in the whole design to the current color">⇄<span>Swap</span></button>
+      <button class="tool" data-tool="pan" aria-label="Pan" title="Pan (H) · or hold Space / middle-drag / two fingers">✋<span>Pan</span></button>
       <div class="current" title="Current color">
-        <div id="currentSwatch" class="swatch big"></div>
-        <div id="currentCode" class="code">—</div>
+        <div id="currentSwatch" class="swatch big" role="img" aria-label="Current color"></div>
+        <div id="currentCode" class="code" aria-hidden="true">—</div>
       </div>
       <div class="zoom">
-        <button data-action="zoom-in" title="Zoom in (+)">＋</button>
-        <button data-action="zoom-fit" title="Fit (0)">⤢</button>
-        <button data-action="zoom-out" title="Zoom out (−)">－</button>
+        <button data-action="zoom-in" aria-label="Zoom in" title="Zoom in (+)">＋</button>
+        <button data-action="zoom-fit" aria-label="Fit to screen" title="Fit to screen (0)">⤢</button>
+        <button data-action="zoom-out" aria-label="Zoom out" title="Zoom out (−)">－</button>
       </div>
     </aside>
 
@@ -77,12 +77,12 @@
         <span id="sizeInfo" class="muted"></span>
       </div>
       <div class="viewport" id="viewport">
-        <canvas id="canvas"></canvas>
+        <canvas id="canvas" role="img" aria-label="Bead design canvas. Draw with a mouse, pen or touch; to build a pattern without drawing, use Image… to convert a picture."></canvas>
         <div id="focusBanner" class="focus-banner" hidden>
-          <button data-action="tray-prev" title="Previous tray ([)">‹</button>
+          <button data-action="tray-prev" aria-label="Previous tray" title="Previous tray ([)">‹</button>
           <span id="focusLabel"></span>
-          <button data-action="tray-next" title="Next tray (])">›</button>
-          <button data-action="tray-unfocus" title="Show whole design (Esc)">✕</button>
+          <button data-action="tray-next" aria-label="Next tray" title="Next tray (])">›</button>
+          <button data-action="tray-unfocus" aria-label="Show whole design" title="Show whole design (Esc)">✕</button>
         </div>
       </div>
       <div class="status" id="status">&nbsp;</div>
@@ -190,7 +190,7 @@
             <canvas id="trayPicker" tabindex="0" role="slider" aria-label="Trays across and down. Arrow keys change the selection, Enter applies it."></canvas>
             <p class="hint">Click a square to fit the image into that many trays across × down. The shaded image shows the current size.</p>
           </div>
-          <label>Max colors <input id="imgMax" type="number" min="0" max="291" value="0" title="0 = no limit"></label>
+          <label>Max colors (0 = no limit) <input id="imgMax" type="number" min="0" max="291" value="0"></label>
           <label class="check"><input type="checkbox" id="imgOwned"> Only use my collection</label>
           <label class="check"><input type="checkbox" id="imgDither"> Dithering (smoother gradients, noisier to build)</label>
           <label class="check"><input type="checkbox" id="imgBg"> Remove background (connected to the edges)</label>

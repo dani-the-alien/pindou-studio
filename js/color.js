@@ -1,4 +1,4 @@
-// Color utilities: hex <-> rgb, sRGB -> CIELAB (D65), CIEDE2000 distance.
+// Color utilities: hex -> rgb, sRGB -> CIELAB (D65) and OKLCH, CIEDE2000 distance.
 (function () {
   function hexToRgb(hex) {
     const h = hex.replace('#', '');
@@ -58,16 +58,18 @@
     return Math.sqrt(tl * tl + tc * tc + th * th + Rt * tc * th);
   }
 
-  // Readable text color (black/white) for a given background hex.
+  // Label color for a bead swatch: whichever of near-black (#111) or white has the
+  // higher WCAG contrast ratio against it.
   function contrastText(hex) {
     const [r, g, b] = hexToRgb(hex);
     const L = 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
-    return L > 0.36 ? '#111' : '#fff';
+    const DARK = 0.0056; // relative luminance of #111
+    return (L + 0.05) / (DARK + 0.05) >= 1.05 / (L + 0.05) ? '#111' : '#fff';
   }
 
   // OKLCH (Björn Ottosson's OKLab in polar form). Used for sorting/grouping the
   // palette, because its hue angles line up with color names far better than
-  // CIELAB's do. L is 0..1, C is roughly 0..0.37, H is degrees.
+  // CIELAB's do. L is 0..1, C is roughly 0..0.32 for sRGB colors, H is degrees.
   function rgbToOklch(r, g, b) {
     const R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b);
     const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);

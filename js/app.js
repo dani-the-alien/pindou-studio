@@ -16,6 +16,10 @@
   let toastTimer;
   function toast(msg, opts = {}) {
     const t = $('#toast');
+    // A modal dialog makes everything outside it inert (unclickable), so while one
+    // is open the toast lives inside it; it moves back when the dialog closes.
+    const host = document.querySelector('dialog[open]') || document.body;
+    if (t.parentElement !== host) { if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } } host.appendChild(t); }
     $('#toastText').textContent = msg;
     $('#toastClose').hidden = !opts.sticky;
     if (t.showPopover) { try { if (t.matches(':popover-open')) t.hidePopover(); t.showPopover(); } catch { t.hidden = false; } }
@@ -629,6 +633,7 @@
     sw.classList.toggle('clear', c.transparent);
     $('#currentCode').textContent = c.code;
     sw.title = `${c.code} ${c.hex}`;
+    sw.setAttribute('aria-label', `Current color ${c.code}`);
     $$('#swatches .sw').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.i === i)));
   }
 
@@ -674,7 +679,15 @@
     if (S.focus) $('#focusLabel').textContent = `${trayName(S.focus.r, S.focus.c)} (${S.focus.r * traysAcross() + S.focus.c + 1}/${n})`;
   }
 
-  function renderSwatches() {
+  // Panels are rebuilt after edits; put keyboard focus back on the same item.
+  function keepFocus(box, attr, rebuild) {
+    const a = document.activeElement;
+    const key = a && box.contains(a) ? a.getAttribute(attr) : null;
+    rebuild();
+    if (key != null) { const el = box.querySelector(`[${attr}="${key}"]`); if (el) el.focus(); }
+  }
+  function renderSwatches() { keepFocus($('#swatches'), 'data-i', buildSwatches); }
+  function buildSwatches() {
     const box = $('#swatches');
     const counts = S.filter === 'used' ? countRegion() : null;
     const used = countRegion();
@@ -697,7 +710,12 @@
       b.style.background = c.hex; b.style.color = c.text;
       b.dataset.i = c.i;
       b.title = `${c.code} ${c.hex}${c.transparent ? ' (clear)' : ''}${used[c.i] ? ` · ${used[c.i]} in design` : ''}${S.owned.has(c.code) ? '' : ' · not in my collection'}`;
-      b.setAttribute('aria-pressed', String(c.i === S.color));
+      if (S.editOwned) {
+        b.setAttribute('aria-pressed', String(S.owned.has(c.code)));
+        b.setAttribute('aria-label', `${c.code}, ${S.owned.has(c.code) ? 'in my collection' : 'not in my collection'}`);
+      } else {
+        b.setAttribute('aria-pressed', String(c.i === S.color));
+      }
       b.textContent = c.code;
       if (used[c.i]) { const d = document.createElement('span'); d.className = 'used-dot'; b.appendChild(d); }
       frag.appendChild(b);
@@ -717,14 +735,15 @@
     body.innerHTML = '';
     for (const { c, n } of list) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><strong>${c.code}</strong></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
+      tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><button type="button" class="code-btn" title="Use ${c.code}">${c.code}</button></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
       tr.addEventListener('click', () => selectColor(c.i));
       body.appendChild(tr);
     }
     if (!list.length) body.innerHTML = '<tr><td class="muted">Nothing placed yet.</td></tr>';
   }
 
-  function renderTrays() {
+  function renderTrays() { keepFocus($('#trayGrid'), 'data-tray', buildTrays); }
+  function buildTrays() {
     flushPix();
     const grid = $('#trayGrid');
     const across = traysAcross(), down = traysDown();
@@ -735,6 +754,7 @@
       const t = trayRect(r, c);
       const b = document.createElement('button');
       b.className = 'tray-cell';
+      b.dataset.tray = `${r},${c}`;
       b.setAttribute('aria-pressed', String(!!S.focus && S.focus.r === r && S.focus.c === c));
       const cv = document.createElement('canvas');
       cv.width = S.tray; cv.height = S.tray;
@@ -804,6 +824,7 @@
     S.focus = null;
     applyState(state);
     S.name = name;
+    changed();
     return missing;
   }
   function saveProject() {
@@ -924,7 +945,13 @@
     download(safeName(S.name) + '-beads.csv', new Blob(['﻿' + lines.join('\n') + '\n'], { type: 'text/csv' }));
   }
 
-  async function printTrays() {
+  function printTrays() {
+    buildPrintSheets();
+    window.print();
+  }
+  // Sheets are canvases (drawn synchronously), so they are ready even when the
+  // browser's own Print (Ctrl+P) fires 'beforeprint' and prints immediately.
+  function buildPrintSheets() {
     const root = $('#printRoot');
     root.innerHTML = '';
     const total = countRegion();
@@ -932,32 +959,28 @@
     const legendHtml = (list) => list.map(({ c, n }) => `<div><span class="chip" style="background:${c.transparent ? 'rgb(226,236,246)' : c.hex}"></span><b>${c.code}</b> × ${fmt(n)}</div>`).join('');
     const addSheet = (title, sub, canvasEl, list) => {
       const sec = document.createElement('section'); sec.className = 'sheet';
-      const img = new Image(); img.src = canvasEl.toDataURL('image/png');
-      sec.innerHTML = `<h2>${escapeHtml(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:6px">${escapeHtml(sub)}</div>`;
-      sec.appendChild(img);
+      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(title)}</h2><div class="sheet-sub">${escapeHtml(sub)}</div></div>`;
+      canvasEl.className = 'sheet-img';
+      sec.appendChild(canvasEl);
       const lg = document.createElement('div'); lg.className = 'legend'; lg.innerHTML = legendHtml(list);
       sec.appendChild(lg);
       root.appendChild(sec);
-      return img.decode ? img.decode().catch(() => {}) : Promise.resolve();
     };
-    const waits = [];
     const ovCs = clamp(Math.floor(1400 / Math.max(S.w, S.h)), 2, 16);
-    waits.push(addSheet(`${S.name} — overview`,
+    addSheet(`${S.name} — overview`,
       `${S.w}×${S.h} beads · ${traysAcross()}×${traysDown()} trays of ${S.tray}×${S.tray} · ${fmt(totalList.reduce((a, b) => a + b.n, 0))} beads · ${PALETTES[S.paletteId].name}`,
-      renderRegion({ x: 0, y: 0, w: S.w, h: S.h }, ovCs, { trayLabels: true, codes: trayCount() === 1 && ovCs >= 14, rulers: trayCount() === 1 }), totalList));
+      renderRegion({ x: 0, y: 0, w: S.w, h: S.h }, ovCs, { trayLabels: true, codes: trayCount() === 1 && ovCs >= 14, rulers: trayCount() === 1 }), totalList);
     if (trayCount() > 1 || ovCs < 14) {
       const cs = S.tray > 80 ? 14 : 20;
       for (let r = 0; r < traysDown(); r++) for (let c = 0; c < traysAcross(); c++) {
         const t = trayRect(r, c);
         const list = usedList(countRegion(t), 'code');
         const n = list.reduce((a, b) => a + b.n, 0);
-        waits.push(addSheet(`${S.name} — ${trayName(r, c)}`,
+        addSheet(`${S.name} — ${trayName(r, c)}`,
           `Tray ${r * traysAcross() + c + 1} of ${trayCount()} · columns ${t.x + 1}–${t.x + t.w}, rows ${t.y + 1}–${t.y + t.h} of the full design · ${fmt(n)} beads`,
-          renderRegion(t, cs, { codes: true, rulers: true }), list));
+          renderRegion(t, cs, { codes: true, rulers: true }), list);
       }
     }
-    await Promise.all(waits);
-    window.print();
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -1025,6 +1048,8 @@
       ? `${target.a} × ${target.d} tray${target.a * target.d > 1 ? 's' : ''} → ${fitToTrays(target.a, target.d).join(' × ')} beads`
       : `${w} × ${h} beads · ${usedA} × ${usedD} tray${usedA * usedD > 1 ? 's' : ''}`;
     cv.setAttribute('aria-valuetext', $('#tpLabel').textContent);
+    cv.setAttribute('aria-valuenow', String(target ? target.a : usedA));
+    cv.setAttribute('aria-valuemax', String(tp.n));
   }
   function fitToTrays(a, d) {
     const A = Math.min(a * S.tray, MAX_DIM), D = Math.min(d * S.tray, MAX_DIM);
@@ -1232,16 +1257,15 @@
     // top actions
     document.addEventListener('click', (e) => {
       const b = e.target.closest('[data-action]');
-      const menu = $('#exportMenu');
-      if (!b) { if (!e.target.closest('.menu')) { menu.hidden = true; } return; }
+      if (!b) { if (!e.target.closest('.menu')) closeMenu(); return; }
       const a = b.dataset.action;
-      if (a !== 'toggle-export') menu.hidden = true;
+      if (a !== 'toggle-export') closeMenu();
       switch (a) {
         case 'new': openNewDialog(); break;
         case 'import-image': openImageDialog(); break;
         case 'open': $('#openFile').click(); break;
         case 'save': saveProject(); break;
-        case 'toggle-export': menu.hidden = !menu.hidden; b.setAttribute('aria-expanded', String(!menu.hidden)); break;
+        case 'toggle-export': if ($('#exportMenu').hidden) openMenu(); else closeMenu(); break;
         case 'export-png': exportPng(); break;
         case 'export-csv': exportCsv(); break;
         case 'print-trays': printTrays(); break;
@@ -1258,6 +1282,22 @@
     $$('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
     $('#toastClose').addEventListener('click', hideToast);
+    const menuBox = $('.menu');
+    menuBox.addEventListener('focusout', (e) => { if (!menuBox.contains(e.relatedTarget)) closeMenu(); });
+    $('#exportMenu').addEventListener('keydown', (e) => {
+      const items = $$('#exportMenu button');
+      const k = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); items[(k + 1) % items.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); items[(k - 1 + items.length) % items.length].focus(); }
+    });
+    $$('dialog').forEach((dlg) => dlg.addEventListener('close', () => {
+      const t = $('#toast');
+      if (t.parentElement !== dlg) return;
+      const visible = !t.hidden;
+      if (t.hidePopover) { try { t.hidePopover(); } catch { /* not open */ } }
+      document.body.appendChild(t);
+      if (visible) { if (t.showPopover) { try { t.showPopover(); } catch { /* unsupported */ } } t.hidden = false; }
+    }));
     $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; autosave(); });
 
     $('#traySize').addEventListener('change', (e) => {
@@ -1297,6 +1337,7 @@
     }));
     $('#editOwned').addEventListener('change', (e) => {
       S.editOwned = e.target.checked;
+      renderSwatches();
       $('#ownAll').hidden = $('#ownNone').hidden = $('#ownedHint').hidden = !S.editOwned;
     });
     const saveOwned = () => store.set('pindou.owned.' + S.paletteId, [...S.owned]);
@@ -1308,6 +1349,8 @@
       if (S.editOwned) {
         if (S.owned.has(c.code)) S.owned.delete(c.code); else S.owned.add(c.code);
         saveOwned(); b.classList.toggle('unowned', !S.owned.has(c.code));
+        b.setAttribute('aria-pressed', String(S.owned.has(c.code)));
+        b.setAttribute('aria-label', `${c.code}, ${S.owned.has(c.code) ? 'in my collection' : 'not in my collection'}`);
       } else {
         selectColor(c.i);
         if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
@@ -1406,6 +1449,7 @@
     // keyboard
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
+      if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       // Ctrl+S saves the project from anywhere, including while typing its name.
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
       if (e.target.closest('input, select, textarea, dialog')) return;
@@ -1428,10 +1472,25 @@
 
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
+    window.addEventListener('beforeprint', () => { if (!$('#printRoot').children.length) buildPrintSheets(); });
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
     // Write the autosave right away when the tab is hidden or closed, not 0.4 s later.
     window.addEventListener('pagehide', flushAutosave);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAutosave(); });
+  }
+
+  function openMenu() {
+    $('#exportMenu').hidden = false;
+    $('[data-action=toggle-export]').setAttribute('aria-expanded', 'true');
+    $('#exportMenu button').focus();
+  }
+  function closeMenu(returnFocus) {
+    const menu = $('#exportMenu');
+    if (menu.hidden) return;
+    menu.hidden = true;
+    const t = $('[data-action=toggle-export]');
+    t.setAttribute('aria-expanded', 'false');
+    if (returnFocus) t.focus();
   }
 
   function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview }); }

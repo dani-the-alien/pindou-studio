@@ -5,8 +5,9 @@
   --text: #1f1d1a;
   --muted: #6d675f;
   --line: #e2ddd5;
-  --accent: #d9485f;
+  --accent: #bf3a52;
   --accent-ink: #ffffff;
+  --field: #958d81;
   --empty: #ebe7e0;
   --peg: #d6d0c6;
   --grid: rgba(0, 0, 0, 0.10);
@@ -25,6 +26,8 @@
     --muted: #a39d94;
     --line: #36343c;
     --accent: #ef6b80;
+    --accent-ink: #1b1a1f;
+    --field: #7a7682;
     --empty: #2b2a30;
     --peg: #3b3941;
     --grid: rgba(255, 255, 255, 0.08);
@@ -55,11 +58,12 @@ button {
 }
 button:hover { border-color: var(--muted); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.small { padding: 2px 8px; font-size: 12px; }
 button:disabled { opacity: .5; cursor: default; }
 input[type=number], input[type=search], input:not([type]), select {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--field);
   border-radius: 8px;
   padding: 5px 8px;
 }
@@ -86,8 +90,9 @@ input[type=number] { width: 80px; }
     radial-gradient(circle at 25% 75%, #2f6fde 0 22%, transparent 24%),
     radial-gradient(circle at 75% 75%, #3fb27f 0 22%, transparent 24%);
 }
-.project-name { border-color: transparent !important; background: transparent !important; font-weight: 600; width: 14em; max-width: 50vw; }
-.project-name:focus { border-color: var(--line) !important; }
+.project-name { border-color: transparent !important; border-bottom: 1px dashed var(--field) !important; border-radius: 0 !important; background: transparent !important; font-weight: 600; width: 14em; max-width: 50vw; }
+.project-name:hover { border-bottom-style: solid !important; }
+.project-name:focus { border: 1px solid var(--field) !important; border-radius: 8px !important; }
 .top-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
 .menu { position: relative; }
@@ -173,7 +178,7 @@ input[type=number] { width: 80px; }
   padding-bottom: 2px;
 }
 .sw[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; z-index: 1; }
-.sw.unowned { opacity: .28; }
+.sw.unowned { opacity: .5; outline: 1px dashed var(--muted); outline-offset: -3px; }
 .sw .used-dot { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .group-label { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: 6px; font-weight: 600; }
 
@@ -181,6 +186,8 @@ table.counts { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.counts td { padding: 4px 4px; border-bottom: 1px solid var(--line); }
 table.counts td.n { text-align: right; font-variant-numeric: tabular-nums; }
 table.counts tr { cursor: pointer; }
+.code-btn { border: 0; background: transparent; padding: 2px 4px; font-weight: 700; }
+.code-btn:focus-visible { outline: 2px solid var(--accent); }
 table.counts tr:hover td { background: var(--panel-2); }
 
 .tray-grid { display: grid; gap: 6px; }
@@ -247,10 +254,13 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
   .print-root { display: block; }
   .sheet { page-break-after: always; break-after: page; padding: 0; }
   .sheet:last-child { page-break-after: auto; break-after: auto; }
+  .sheet-head { break-after: avoid; }
   .sheet h2 { font-size: 16px; margin: 0 0 6px; }
-  .sheet img { width: 100%; height: auto; display: block; }
+  .sheet-sub { font-size: 12px; color: #555; margin-bottom: 6px; }
+  /* Fit each pattern on one page: as wide as the page allows, but never taller than it. */
+  .sheet-img { display: block; width: auto; height: auto; max-width: 100%; max-height: 72vh; break-inside: avoid; }
   .sheet table { border-collapse: collapse; font-size: 11px; margin-top: 8px; }
   .sheet td { padding: 2px 8px 2px 0; }
   .sheet .chip { display: inline-block; width: 12px; height: 12px; border: 1px solid #999; vertical-align: middle; margin-right: 4px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .sheet .legend { columns: 4; font-size: 11px; margin-top: 8px; }
+  .sheet .legend { columns: 6; font-size: 10px; line-height: 1.35; margin-top: 8px; }
 }

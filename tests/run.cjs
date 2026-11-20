@@ -286,7 +286,7 @@ test('icon-only buttons have spoken names', async (p) => {
 });
 test('bead counts can be chosen from the keyboard', async (p) => {
   await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
-  await p.click('[role=tab][data-tab=counts]');
+  await p.click('[role=tab][data-tab=counts]'); await p.waitForTimeout(300); // panels refresh shortly after an edit
   const n = await p.evaluate(() => document.querySelectorAll('#countBody button').length);
   assert(n >= 1, 'count rows are not buttons');
 });
