@@ -534,10 +534,12 @@
   viewport.addEventListener('contextmenu', (e) => e.preventDefault());
   viewport.addEventListener('pointerdown', (e) => {
     if (!tab.editing) return; // another tab is editing (or this one is still starting)
-    if ($('#fileActions').classList.contains('open')) { setMore(false); return; } // that tap just closes the menu
+    const closingMenu = $('#fileActions').classList.contains('open');
+    if (closingMenu) setMore(false); // this touch only closes the menu…
     viewport.setPointerCapture(e.pointerId);
     const p = localPt(e);
     pointers.set(e.pointerId, p);
+    if (closingMenu && pointers.size === 1) { gesture = { kind: 'none' }; return; } // …but a second finger still makes it a pinch
     if (pointers.size === 2) {
       // second finger: abandon any stroke and pinch-zoom instead
       cancelStroke();
@@ -737,7 +739,7 @@
     selectColor(i);
     if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
   }
-  const phoneMQ = matchMedia('(max-width: 599px)'), foldedMQ = matchMedia('(vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+  const phoneMQ = matchMedia('(max-width: 599.98px)'), foldedMQ = matchMedia('(vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
   // Is the sidebar a bottom sheet right now? (phones, except when folded at the hinge,
   // where it's always open). Checked separately: browsers that don't know the
   // segments feature would make a combined "not (...)" query false altogether.
@@ -1026,6 +1028,16 @@
       // otherwise: our own queued wait was cancelled
     });
   }
+  // Web Locks only exist on secure addresses (https, localhost, 127.0.0.1). On a plain
+  // http network address every tab edits, as in 1.0; warn when a second tab appears.
+  function warnNoLocking() {
+    if (!('BroadcastChannel' in window)) return;
+    const ch = new BroadcastChannel('pindou-nolock');
+    const warn = () => toast("Pindou Studio is open in more than one tab, and at this address it can't stop them overwriting each other's autosave. Keep to one tab, or open it at 127.0.0.1 / localhost or over https.", { sticky: true });
+    let warned = false;
+    ch.onmessage = (e) => { if (e.data === 'hello') ch.postMessage('here'); if (!warned) { warned = true; warn(); } };
+    ch.postMessage('hello');
+  }
   function noLocking() { tab.state = 'off'; tab.editing = true; hideTabNotice(); if (tab.ready) tab.ready(); }
   function waitForLock() {
     if (tab.waiting || document.visibilityState !== 'visible') return;
@@ -1082,9 +1094,12 @@
   }
   function becomeEditor(latest, quiet, source) {
     tab.state = 'editing'; tab.editing = true; tab.lastSync = source; tab.everEdited = true;
+    // "My collection" may have changed in the other tab too
+    S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
     tab.gen = Math.max(store.get(GEN_KEY, 0) || 0, genOf(latest)) + 1;
     store.set(GEN_KEY, tab.gen);
     takeLatest(latest, quiet);
+    refreshPanels();
     post({ type: 'editing' });
     if (tab.ready) tab.ready();
   }
@@ -1164,8 +1179,9 @@
         if (JSON.stringify(project) !== JSON.stringify(serialize())) {
           const { state, name } = parseProject(project);
           S.focus = null;
-          if (quiet) { applyState({ ...state, name }); S.name = name; refreshPanels(); requestDraw(); }
+          if (quiet) { applyState({ ...state, name }); S.name = name; requestDraw(); }
           else replaceState({ ...state, name });
+          S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
           msg = "Editing in this tab now, with the other tab's latest work. Undo goes back to what this tab had.";
         }
       } catch { /* unreadable: keep what this tab has */ }
@@ -1183,9 +1199,21 @@
     if (!d.open) showDialog(d);
     $('#tabTake').focus();
   }
-  function hideTabNotice() { tab.blocked = false; const d = $('#tabDialog'); if (d.open) d.close(); }
+  function hideTabNotice() {
+    tab.blocked = false;
+    const d = $('#tabDialog');
+    if (!d.open) return;
+    d.close();
+    // the control that had focus before may be hidden in this layout now
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (a && a !== document.body && a.getClientRects().length) return;
+      const to = ['#moreBtn', '[data-action=save]', '.tool[aria-pressed="true"]'].map((s) => $(s)).find((el) => el && el.getClientRects().length);
+      if (to) to.focus();
+    });
+  }
   function initTabLock() {
-    if (!(navigator.locks && navigator.locks.request)) return Promise.resolve();
+    if (!(navigator.locks && navigator.locks.request)) { warnNoLocking(); return Promise.resolve(); }
     tab.state = 'starting'; tab.editing = false;
     if ('BroadcastChannel' in window) { tab.chan = new BroadcastChannel('pindou'); tab.chan.onmessage = onMessage; }
     const d = $('#tabDialog');
@@ -1628,6 +1656,7 @@
   const BUSY_DELAY = 400;
   function showBusy(pass, progress, passMs) {
     const pct = Math.min(99, Math.floor(progress * 100));
+    if ($('#imgBusy').hidden) requestAnimationFrame(() => $('#imgBusy').scrollIntoView({ block: 'nearest' }));
     $('#imgPreviewBox').classList.add('busy');
     $('#imgPreviewBox').setAttribute('aria-busy', 'true');
     $('#imgBusy').hidden = false;
@@ -1821,7 +1850,7 @@
     // Compact layouts put the swatches right under the palette/search row, so colors
     // come first and the screen order matches the Tab order (the elements move, as
     // with the stage bar; desktop keeps its order).
-    const swatchesFirstMQ = matchMedia('(max-width: 599px), (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+    const swatchesFirstMQ = matchMedia('(max-width: 599.98px), (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
     const placeSwatches = () => {
       const sw = $('#swatches'), hint = $('#ownedHint'), panel = $('[data-panel=palette]');
       const focused = sw.contains(document.activeElement) ? document.activeElement : null;
@@ -1855,13 +1884,13 @@
       else if (f.matches('[data-action=zoom-in], [data-action=zoom-out]')) to = $('[data-action=zoom-fit]');
       if (to && to.getClientRects().length) to.focus();
     }
-    const compactMQ = matchMedia('(max-width: 799px), (max-height: 520px)');
+    const compactMQ = matchMedia('(max-width: 799.98px), (max-height: 520px)');
     const onLayoutChange = () => {
       if (!compactMQ.matches) setMore(false); // a layout without ⋯ closes it, so it doesn't linger unseen
       placeSwatches();
       requestAnimationFrame(keepFocusVisible);
     };
-    [phoneMQ, foldedMQ, shortMQ, compactMQ, swatchesFirstMQ, matchMedia('(max-width: 379px)')].forEach((mq) => mq.addEventListener('change', onLayoutChange));
+    [phoneMQ, foldedMQ, shortMQ, compactMQ, swatchesFirstMQ, matchMedia('(max-width: 379.98px)')].forEach((mq) => mq.addEventListener('change', onLayoutChange));
     // The folded-phone layout needs the top bar's height.
     new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', $('.topbar').offsetHeight + 'px')).observe($('.topbar'));
 
@@ -2089,7 +2118,11 @@
 
     new ResizeObserver(resizeCanvas).observe(viewport);
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTheme(); rebuildPixmap(); refreshPanels(); requestDraw(); });
-    window.addEventListener('beforeprint', () => { saveBeforeDialog(); if (!$('#printRoot').children.length) buildPrintSheets(); });
+    window.addEventListener('beforeprint', () => {
+      saveBeforeDialog();
+      if (!tab.editing) { $('#printRoot').innerHTML = '<section class="sheet"><div class="sheet-head"><h2>Print from the tab you are editing in</h2><div class="sheet-sub">This tab is paused, so its copy of the design may be out of date.</div></div></section>'; return; }
+      if (!$('#printRoot').children.length) buildPrintSheets();
+    });
     window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
     // Write the autosave right away when the tab is hidden or closed, not 0.4 s later.
     window.addEventListener('pagehide', flushAutosave);

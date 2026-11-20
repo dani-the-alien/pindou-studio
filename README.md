@@ -6,6 +6,10 @@ Plain HTML/CSS/JS: no build step, no server-side code, no accounts. Everything h
 
 ## Get it and run it
 
+**Use it online:** https://dani-the-alien.github.io/pindou-studio/ (nothing to install; works on phones and tablets too).
+
+**Or run your own copy:**
+
 ```
 git clone https://github.com/dani-the-alien/pindou-studio
 cd pindou-studio
@@ -15,6 +19,8 @@ python3 -m http.server 8000 --bind 127.0.0.1
 Then open http://127.0.0.1:8000 in a current Chrome, Edge, Firefox or Safari. (`--bind 127.0.0.1` keeps it to this computer; without it, other devices on your network can open it too.) Any static web host works as well.
 
 Your current design autosaves in the browser, **tied to that exact address and browser**: opening it at another address, port or browser starts fresh. Use **Save** to keep a design as a `.pindou.json` file, and **Open** to load it anywhere.
+
+**One tab edits at a time.** All tabs at one address share that autosave, so if Pindou Studio is open in a second tab, that tab shows "Open in another tab" instead of editing. **Edit here instead** moves editing there: the other tab saves and hands over its design first. If the other tab can't answer (a dialog such as Print is open in it, or it's asleep in the background), switch to it or close it. This needs a secure address (https, `localhost` or `127.0.0.1`); over plain http on a network address (`http://192.168.…`) every tab edits on its own, and the app warns when it sees a second tab.
 
 **Desktop app on Linux:** `bash desktop/install.sh` adds a Pindou Studio entry to the app menu, backed by a small local server that only this computer can reach. It's built for Bazzite / KDE Plasma and works on most systemd Linux desktops; nothing needs root. Run it again to update. [`desktop/INSTALL-AGENT.md`](desktop/INSTALL-AGENT.md) walks an AI assistant through doing this for someone.
 
@@ -30,6 +36,8 @@ Your current design autosaves in the browser, **tied to that exact address and b
   - CSV of bead counts, with a column per tray when the design spans more than one.
   - Print sheets: an overview, plus one page per tray to build from. A small single-tray design prints as one page with codes. The browser's own Print (Ctrl+P) works too.
 - **My collection**: mark which colors you own, then filter the palette or limit image conversion to them.
+- **Phones, tablets and foldables**: on a phone the tools sit along the bottom and a row of quick colors (current, recent, and the colors in your design) is always in reach; ▴ opens the full palette and panels as a sheet. Small screens fold New/Image/Open/Save/Export into a ⋯ menu. Tablets in portrait dock the panels under the canvas. A foldable bent at its hinge puts the canvas on one half and the controls on the other.
+- **Exports say where they came from**: PNG patterns and printed sheets carry a small "Made with Pindou Studio" line with the app's address.
 
 ## Shortcuts
 
@@ -41,7 +49,8 @@ Your current design autosaves in the browser, **tied to that exact address and b
 | Shift+wheel, trackpad scroll | Pan |
 | Ctrl+Z · Ctrl+Shift+Z or Ctrl+Y | Undo · Redo |
 | Ctrl+S | Save the project |
-| [ · ] · Esc | Previous / next tray · leave tray focus or close the menu |
+| [ · ] · Esc | Previous / next tray · leave tray focus, or close the menu, the ⋯ menu or the phone color sheet |
+| ← → · Home · End (in the quick-color row) | Move along the quick colors |
 
 On a Mac, Cmd works in place of Ctrl. Single-key shortcuts are ignored while you're typing in a text box or a dropdown has focus.
 
@@ -56,7 +65,7 @@ tools/bump-version.sh --check      # confirms the version is consistent
 python3 tools/gen-palettes.py      # after changing data/; regenerates js/palettes.js
 ```
 
-The running version is shown in the status bar. If the page and its scripts ever come from different versions (a browser reusing cached files), the app says so and asks for a full reload (Ctrl+Shift+R).
+The running version is shown in the status bar (on phones and other small screens, at the bottom of the ⋯ menu). If the page and its scripts ever come from different versions (a browser reusing cached files), the app says so and asks for a full reload (Ctrl+Shift+R).
 
 ## Palette data
 

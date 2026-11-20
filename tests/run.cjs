@@ -337,17 +337,23 @@ test('a second tab is paused: no drawing, no keyboard edits, no saving; Escape c
   const t2 = await secondTab(p);
   eq(await tabState(p), { editing: true, notice: false }, 'first tab');
   eq(await tabState(t2), { editing: false, notice: true }, 'second tab');
+  // give the second tab an undo history of its own, then hand editing back
+  await t2.click('#tabTake'); await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t2.click('[data-tool=eraser]'); await t2.mouse.click(...await cellPoint(t2, 3, 2)); await t2.waitForTimeout(500);
+  await p.click('#tabTake'); await p.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await p.waitForTimeout(100);
+  eq(await t2.evaluate(() => __pindou.S.undo.length > 0), true, 'second tab has something to undo');
   for (let k = 0; k < 3; k++) await t2.keyboard.press('Escape'); // browsers let repeated Escape close a modal
   await t2.waitForTimeout(50);
   eq(await tabState(t2), { editing: false, notice: true }, 'notice after Escape ×3');
   await t2.keyboard.press('Control+z');
-  eq(await beads(t2), 10, 'Ctrl+Z changed the paused tab');
+  eq(await beads(t2), 9, 'Ctrl+Z changed the paused tab');
   // try to change the paused tab's design and name directly, then close it
   await t2.evaluate(() => { const n = document.querySelector('#projectName'); n.value = 'from paused tab'; n.dispatchEvent(new Event('input')); });
   await t2.evaluate(() => window.dispatchEvent(new Event('pagehide')));
   const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')));
   assert(saved.name !== 'from paused tab', 'paused tab renamed the design');
-  eq(saved.cells.filter((v) => v >= 0).length, 10, 'beads in autosave');
+  eq(saved.cells.filter((v) => v >= 0).length, 9, 'beads in autosave');
   eq(t2.errors, [], 'page errors');
 });
 test('"Edit here instead" hands over quickly with the latest work, and back again', async (p) => {
@@ -412,11 +418,14 @@ test('three tabs, two asking while the editor is busy: one editor in the end, an
   await p.waitForTimeout(800);
   eq(await savedBeads(p), 52 * 52, 'autosave after the editor closed');
 });
-test('if the browser refuses to autosave, the page says so', async (p) => {
-  await p.evaluate(() => { Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); }; });
+test('if the browser refuses to autosave, the page says so, and when it works again', async (p) => {
+  await p.evaluate(() => { window.__origSetItem = Storage.prototype.setItem; Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); }; });
   await stroke(p, 5); await p.waitForTimeout(600);
   await p.waitForFunction(() => !document.querySelector('#toast').hidden);
   assert(/won't let Pindou Studio autosave/.test(await p.textContent('#toastText')), 'no warning');
+  await p.evaluate(() => { Storage.prototype.setItem = window.__origSetItem; });
+  await stroke(p, 6); await p.waitForTimeout(600);
+  await p.waitForFunction(() => /working again/.test(document.querySelector('#toastText').textContent), null, { timeout: 3000 });
 });
 test('three tabs: the lock goes to the tab that asked, not another waiting tab', async (p) => {
   const b = await secondTab(p), c = await secondTab(p);
@@ -547,6 +556,8 @@ test('exported PNG and printed sheets carry the app address', async (p) => {
   const dl = p.waitForEvent('download');
   await p.click('[data-action=export-png]'); await dl;
   assert(await p.evaluate(() => window.__texts.some((t) => t.includes('dani-the-alien.github.io/pindou-studio'))), 'PNG has no address');
+  // the credit is the last line, below every legend entry
+  eq(await p.evaluate(() => { const i = window.__texts.findIndex((t) => t.includes('dani-the-alien.github.io')); return i === window.__texts.length - 1; }), true, 'credit drawn last, after the legend');
   await p.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
   const sheets = await p.evaluate(() => [...document.querySelectorAll('#printRoot .sheet')].map((s) => s.textContent.includes('dani-the-alien.github.io/pindou-studio')));
   assert(sheets.length && sheets.every(Boolean), 'a printed sheet has no address');
@@ -917,6 +928,43 @@ test('tiny cover screen (300×330): Fit still reachable', async (p) => {
   assert(await tappable(p, '[data-action=zoom-fit]'), 'Fit');
   for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
 }, touch({ width: 300, height: 330 }));
+test('a pinch started while the ⋯ menu is open zooms and draws nothing', async (p) => {
+  await p.tap('#moreBtn');
+  const box = await p.locator('#viewport').boundingBox();
+  const s0 = await p.evaluate(() => __pindou.S.view.scale);
+  await pinch(p, box.x + 60, box.y + box.height / 2);
+  eq([await beads(p), await undoLen(p)], [0, 0], 'beads and undo steps');
+  assert(await p.evaluate(() => __pindou.S.view.scale) > s0, 'did not zoom');
+}, touch(SCREENS['foldable cover / tall phone']));
+test('"my collection" goes with editing to the other tab', async (p) => {
+  const t2 = await secondTab(p);
+  await p.check('#editOwned'); await p.click('#ownNone'); await p.uncheck('#editOwned');
+  await t2.click('#tabTake'); await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  eq(await t2.evaluate(() => __pindou.S.owned.size), 0, 'collection in the new editor');
+});
+test('Ctrl+P in a paused tab prints a pointer to the editing tab, not an old design', async (p) => {
+  const t2 = await secondTab(p);
+  await t2.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  const txt = await t2.evaluate(() => document.querySelector('#printRoot').textContent);
+  assert(/Print from the tab you are editing in/.test(txt), 'paused tab printed its design');
+});
+test('phone: taking editing back leaves keyboard focus on a visible control', async (p) => {
+  const t2 = await secondTab(p);
+  await t2.click('#tabTake'); await t2.waitForFunction(() => __pindou.tab.editing);
+  await p.focus('#tabTake'); await p.keyboard.press('Enter');
+  await p.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await p.waitForTimeout(100);
+  assert(await p.evaluate(() => document.activeElement !== document.body && document.activeElement.getClientRects().length > 0), 'focus lost');
+}, { viewport: { width: 412, height: 780 } });
+test('phone: the conversion progress card scrolls into view', async (p) => {
+  await p.tap('#moreBtn'); await p.tap('[data-action=import-image]');
+  const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 400; const g = c.getContext('2d'); const d = g.createImageData(400, 400); for (let i = 0; i < d.data.length; i++) d.data[i] = i % 4 === 3 ? 255 : (Math.random() * 256) | 0; g.putImageData(d, 0, 0); return c.toDataURL(); });
+  await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
+  await p.fill('#imgW', '400'); await p.dispatchEvent('#imgW', 'input');
+  await p.waitForFunction(() => !document.querySelector('#imgBusy').hidden, null, { timeout: 10000 });
+  await p.waitForTimeout(300);
+  assert(await p.evaluate(() => { const r = document.querySelector('#imgBusy').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), 'progress card off screen');
+}, touch({ width: 390, height: 780 }));
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);
