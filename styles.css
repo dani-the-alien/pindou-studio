@@ -219,7 +219,9 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .link-which { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .link-which legend { font-size: 13px; padding: 0; margin-bottom: 4px; }
 #linkSimpleCtl[hidden], #linkSimpler[hidden] { display: none; }
-#linkColors { width: 100%; accent-color: var(--accent); }
+#linkColors { width: 100%; accent-color: var(--accent); margin: 0; }
+.range-row { display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+.range-row output { font-weight: 600; }
 .simpler-preview { display: flex; gap: 12px; }
 .simpler-preview figure { margin: 0; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .simpler-preview canvas { width: 100%; max-width: 200px; height: auto; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; }
@@ -229,8 +231,9 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .qr-box canvas.qr { image-rendering: pixelated; border-radius: 4px; } /* sized exactly by JS */
 /* An on/off setting in a menu: a box, ticked when on, below a divider */
 .menu-pop .menu-toggle { border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px; padding-top: 8px; }
-.menu-toggle::before { content: '☐' / ''; display: inline-block; width: 1.4em; } /* aria-pressed says it; the box is for the eye */
-.menu-toggle[aria-pressed="true"]::before { content: '☑' / ''; }
+/* aria-pressed says it; the box is for the eye (the plain `content` first, for browsers without alt text) */
+.menu-toggle::before { content: '☐'; content: '☐' / ''; display: inline-block; width: 1.4em; }
+.menu-toggle[aria-pressed="true"]::before { content: '☑'; content: '☑' / ''; }
 .dlg-group[hidden] { display: none; }
 /* An on/off switch (a checkbox with role="switch") */
 .dlg label.switch { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
