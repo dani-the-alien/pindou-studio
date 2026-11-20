@@ -213,6 +213,13 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dlg label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .dlg label.check { flex-direction: row; }
 .dlg-group { display: flex; flex-direction: column; gap: 10px; }
+.qr-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.qr-box[hidden] { display: none; }
+.qr-box canvas.qr { width: min(100%, 340px); height: auto; image-rendering: pixelated; border-radius: 4px; }
+/* An on/off setting in a menu: a box, ticked when on, below a divider */
+.menu-pop .menu-toggle { border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px; padding-top: 8px; }
+.menu-toggle::before { content: '☐'; display: inline-block; width: 1.4em; }
+.menu-toggle[aria-pressed="true"]::before { content: '☑'; }
 .dlg-group[hidden] { display: none; }
 /* An on/off switch (a checkbox with role="switch") */
 .dlg label.switch { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
@@ -512,4 +519,5 @@ label.inline { min-width: 0; }
   .sheet td { padding: 2px 8px 2px 0; }
   .sheet .chip { display: inline-block; width: 12px; height: 12px; border: 1px solid #999; vertical-align: middle; margin-right: 4px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .sheet .legend { columns: 6; font-size: 10px; line-height: 1.35; margin-top: 8px; }
+  .sheet-qr { display: block; margin: 12mm 0 6mm; image-rendering: pixelated; break-inside: avoid; }
 }

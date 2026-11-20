@@ -6,8 +6,8 @@
   <title>Pindou Studio</title>
   <!-- Version: keep in sync with VERSION in js/app.js (tools/bump-version.sh does both). The ?v= on each
        script/style URL makes browsers fetch fresh files after an update instead of reusing cached ones. -->
-  <meta name="pindou-version" content="1.2.0">
-  <link rel="stylesheet" href="styles.css?v=1.2.0">
+  <meta name="pindou-version" content="1.3.0">
+  <link rel="stylesheet" href="styles.css?v=1.3.0">
 </head>
 <body>
   <header class="topbar">
@@ -29,6 +29,7 @@
           <button data-action="export-png">Pattern PNG (with codes + legend)</button>
           <button data-action="export-csv">Bead counts CSV</button>
           <button data-action="print-trays">Print per-tray sheets</button>
+          <button data-action="toggle-qr" class="menu-toggle" aria-pressed="false" title="Adds a QR code that opens this design: below the legend in the PNG, and as a last page when printing">Add a QR code (PNG &amp; print)</button>
         </div>
       </div>
       <span class="sep repo-sep"></span>
@@ -179,6 +180,8 @@
       <p>Anyone who opens this link gets their own copy of this design in Pindou Studio. The design is inside the link itself; Pindou Studio doesn't upload it anywhere.</p>
       <label>Link <input id="linkText" readonly spellcheck="false" autocomplete="off"></label>
       <p class="hint" id="linkHint"></p>
+      <div><button type="button" id="linkQrBtn">Show QR code</button></div>
+      <div id="linkQrBox" class="qr-box" hidden></div>
       <div id="linkLiveRow" class="dlg-group">
       <label class="switch"><input type="checkbox" role="switch" id="linkLive" aria-describedby="linkLiveHint"> Keep this design's link in the address bar</label>
       <p class="hint" id="linkLiveHint">To bookmark the design: turn this on, then bookmark the page (Ctrl+D, ⌘D, or the ☆ in the address bar or browser menu). While it's on, the address follows your edits in this tab, so each bookmark saves the design as it was when you made it.</p>
@@ -277,8 +280,9 @@
   <div id="printRoot" class="print-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><span id="toastText"></span><button id="toastClose" class="toast-close" type="button" hidden>Dismiss</button></div>
 
-  <script src="js/palettes.js?v=1.2.0"></script>
-  <script src="js/color.js?v=1.2.0"></script>
-  <script src="js/app.js?v=1.2.0"></script>
+  <script src="js/palettes.js?v=1.3.0"></script>
+  <script src="js/qrcodegen.js?v=1.3.0"></script>
+  <script src="js/color.js?v=1.3.0"></script>
+  <script src="js/app.js?v=1.3.0"></script>
 </body>
 </html>
