@@ -166,10 +166,9 @@ test('Ctrl+S saves even while typing the project name', async (p) => {
   assert(dl.suggestedFilename().endsWith('.pindou.json'), 'no project download');
 });
 test('a malformed file leaves the current design intact and saveable', async (p) => {
-  await p.selectOption('#paletteSelect', 'mard291');
   await p.evaluate(() => { const S = __pindou.S; S.cells[0] = S.codeIndex.get('R2'); });
   await openFile(p, { format: 'pindou-studio', palette: 'mard221', w: 2, h: 1, cells: [0, 0] });
-  eq(await p.evaluate(() => [__pindou.S.paletteId, __pindou.S.w, __pindou.S.palette[__pindou.S.cells[0]].code]), ['mard291', 52, 'R2'], 'state after bad file');
+  eq(await p.evaluate(() => [__pindou.S.paletteId, __pindou.S.w, __pindou.S.palette[__pindou.S.cells[0]].code]), ['mard', 52, 'R2'], 'state after bad file');
   await p.evaluate(() => __pindou.serialize());
   eq(p.errors, [], 'page errors');
 });
@@ -184,30 +183,41 @@ test('opening a file can be undone', async (p) => {
   await p.keyboard.press('Control+z');
   eq(await p.evaluate(() => [__pindou.S.w, __pindou.S.cells[5]]), [52, 3], 'after undo');
 });
-test('switching palettes can be undone without losing colors', async (p) => {
-  p.on('dialog', (d) => d.accept());
-  await p.selectOption('#paletteSelect', 'mard291');
-  await p.evaluate(() => { const S = __pindou.S; S.cells[0] = S.codeIndex.get('P1'); S.cells[1] = S.codeIndex.get('ZG8'); });
-  await p.selectOption('#paletteSelect', 'mard221');
-  await p.keyboard.press('Control+z');
-  eq(await p.evaluate(() => [__pindou.S.paletteId, __pindou.S.palette[__pindou.S.cells[0]].code, __pindou.S.palette[__pindou.S.cells[1]].code, document.querySelector('#paletteSelect').value]), ['mard291', 'P1', 'ZG8', 'mard291'], 'after undo');
+test('files and links from before the single palette open with every color', async (p) => {
+  for (const [palette, legend] of [['mard291', ['P1', 'ZG8', 'A25']], ['mard221', ['A25', 'H13', 'B5']]]) {
+    await openFile(p, { format: 'pindou-studio', version: 1, name: palette, palette, tray: 52, w: 3, h: 1, legend, cells: [0, 1, 2] });
+    eq(await p.evaluate(() => [__pindou.S.paletteId, ...[...__pindou.S.cells].map((v) => __pindou.S.palette[v].code)]), ['mard', ...legend], palette);
+  }
+  // and links (which carry the palette's name the same way)
+  const r = await p.evaluate(async () => {
+    const d = { name: 'old link', palette: 'mard291', tray: 52, w: 2, h: 1, legend: ['T1', 'Y5'], cells: [0, 1] };
+    const x = await __pindou.unpackDesign(await __pindou.packDesign(d));
+    return [x.state.paletteId, ...[...x.state.cells].map((v) => __pindou.S.palette[v].code), x.missing.length];
+  });
+  eq(r, ['mard', 'T1', 'Y5', 0], 'old link');
 });
-test('a lossy palette switch asks first, and Cancel keeps everything', async (p) => {
-  await p.selectOption('#paletteSelect', 'mard291');
-  await p.evaluate(() => { __pindou.S.cells[0] = __pindou.S.codeIndex.get('P1'); });
-  let asked = false; p.once('dialog', (d) => { asked = true; d.dismiss(); });
-  await p.selectOption('#paletteSelect', 'mard221'); await p.waitForTimeout(100);
-  assert(asked, 'no confirmation');
-  eq(await p.evaluate(() => [__pindou.S.paletteId, document.querySelector('#paletteSelect').value]), ['mard291', 'mard291'], 'after cancel');
+test('My collection carries over from before, and has a 221-set preset', async (p) => {
+  await p.evaluate(() => {
+    localStorage.removeItem('pindou.owned.mard');
+    localStorage.setItem('pindou.owned.mard221', JSON.stringify(['A1', 'A2']));
+    localStorage.setItem('pindou.owned.mard291', JSON.stringify(['P1']));
+    const a = JSON.parse(localStorage.getItem('pindou.autosave') || '{}'); a.palette = 'mard291'; localStorage.setItem('pindou.autosave', JSON.stringify(a));
+  });
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await p.evaluate(() => [...__pindou.S.owned]), ['P1'], 'the last-used palette\'s collection');
+  await p.check('#editOwned'); await p.click('#own221');
+  eq(await p.evaluate(() => __pindou.S.owned.size), 221, '221 set');
+  assert(!(await p.evaluate(() => __pindou.S.owned.has('P1'))), 'P1 isn\'t in the 221 set');
+  await p.click('#ownAll');
+  eq(await p.evaluate(() => __pindou.S.owned.size), 291, 'all');
 });
-test('reopening the image dialog after a palette switch cannot apply a stale result', async (p) => {
-  p.on('dialog', (d) => d.accept());
-  await p.selectOption('#paletteSelect', 'mard291');
+test('a color correction while the image dialog has a result cannot apply a stale one', async (p) => {
   await p.click('[data-action=import-image]');
   await p.setInputFiles('#imgFile', await makeImage(p, 20, 20));
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
   await p.click('#imgApply'); await p.waitForTimeout(100);
-  await p.selectOption('#paletteSelect', 'mard221');
+  await p.evaluate(() => { const d = __pindou.disputedColors()[0]; localStorage.setItem('pindou.colorFixes', JSON.stringify({ [d.code]: d.hexes[1] })); window.dispatchEvent(new StorageEvent('storage', { key: 'pindou.colorFixes' })); });
+  eq(await p.evaluate(() => __pindou.imgState.result), null, 'old conversion kept after the colors changed');
   await p.click('[data-action=import-image]');
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
   await p.click('#imgApply'); await p.waitForTimeout(150);
@@ -624,7 +634,7 @@ for (const [name, vp, opts] of ALL_SCREENS) {
     assert(await tappable(p, '#swatches .sw'), 'the full palette shows no colors');
     assert(quick || !(await p.evaluate(() => matchMedia('(max-width: 599.98px), (max-height: 520px)').matches)), 'no quick colors on a phone');
     // the palette's own controls still exist (maybe after the swatches)
-    for (const sel of ['#paletteSelect', '#paletteSearch', '#paletteFilter', '#editOwned']) {
+    for (const sel of ['#paletteSearch', '#paletteFilter', '#editOwned']) {
       assert(await p.evaluate((sel) => { const el = document.querySelector(sel); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }, sel), `${sel} not shown`);
     }
     // the top bar is one row
@@ -663,7 +673,7 @@ test('phone: quick colors switch color and tool; recent picks come first; the sh
   eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'false', 'Escape closes the sheet');
 }, touch(SCREENS['foldable cover / tall phone']));
 test('phone: a message does not cover undo or ⋯', async (p) => {
-  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await openFile(p, { format: 'pindou-studio', version: 1, name: 'msg', palette: 'mard', tray: 52, w: 2, h: 1, legend: ['A1'], cells: [0, 0] }); // shows a message
   await p.waitForFunction(() => !document.querySelector('#toast').hidden);
   const overlap = await p.evaluate(() => {
     const t = document.querySelector('#toast').getBoundingClientRect();
@@ -753,7 +763,7 @@ test('flip phone sideways, half-open like a book: all tools reachable', async (p
 }, touch({ width: 820, height: 412 }));
 test('folded with the hinge across: messages appear above the hinge, clear of the tools', async (p) => {
   await fold(p, { width: 720, height: 790 }, 'horizontal', 385, 20);
-  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await openFile(p, { format: 'pindou-studio', version: 1, name: 'msg', palette: 'mard', tray: 52, w: 2, h: 1, legend: ['A1'], cells: [0, 0] }); // shows a message
   await p.waitForFunction(() => !document.querySelector('#toast').hidden);
   const r = await p.evaluate(() => ({ bottom: document.querySelector('#toast').getBoundingClientRect().bottom, hinge: window.viewport.segments[0].height }));
   assert(r.bottom <= r.hinge, `message reaches ${r.bottom}, hinge at ${r.hinge}`);
@@ -919,7 +929,7 @@ test('folding and unfolding keeps keyboard focus on a visible control', async (p
 test('book-style fold on a lower screen (960×600): zoom buttons reachable, messages in the right half', async (p) => {
   await fold(p, { width: 960, height: 600 }, 'vertical', 470, 20);
   for (const a of ['zoom-in', 'zoom-fit', 'zoom-out']) assert(await tappable(p, `[data-action=${a}]`), a);
-  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await openFile(p, { format: 'pindou-studio', version: 1, name: 'msg', palette: 'mard', tray: 52, w: 2, h: 1, legend: ['A1'], cells: [0, 0] }); // shows a message
   await p.waitForFunction(() => !document.querySelector('#toast').hidden);
   const r = await p.evaluate(() => ({ left: document.querySelector('#toast').getBoundingClientRect().left, x1: window.viewport.segments[1].x }));
   assert(r.left >= r.x1, `message starts at ${r.left}, right half at ${r.x1}`);
@@ -1024,8 +1034,6 @@ test('cancelling the image dialog stops the conversion; a palette switch afterwa
   await p.waitForTimeout(250);
   await p.click('#imageDialog button[value=cancel]');
   eq(await p.evaluate(() => !!__pindou.imgState.job), false, 'job still running after Cancel');
-  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(200);
-  await p.selectOption('#paletteSelect', 'mard221'); await p.waitForTimeout(200);
   eq(p.errors, [], 'page errors');
 });
 test('the selected swatch keeps its selection ring even when not in my collection', async (p) => {
@@ -1054,16 +1062,16 @@ test('undoing Open brings back the previous project name', async (p) => {
   await p.keyboard.press('Control+z');
   eq([await p.inputValue('#projectName'), await p.evaluate(() => __pindou.S.name)], ['Frog', 'Frog'], 'name after undo');
 });
-test('switching palettes keeps the zoom', async (p) => {
+test('a color correction keeps the zoom', async (p) => {
   await p.click('[data-action=zoom-in]'); await p.click('[data-action=zoom-in]');
   const z = await p.evaluate(() => __pindou.S.view.scale);
-  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(100);
-  eq(await p.evaluate(() => __pindou.S.view.scale), z, 'zoom after switch');
+  await p.click('#checkColors'); await p.click('#checkPair button:last-child'); await p.waitForTimeout(100);
+  eq(await p.evaluate(() => __pindou.S.view.scale), z, 'zoom after a correction');
 });
-test('Ctrl+Z works while the palette dropdown has focus', async (p) => {
-  await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(100);
-  await p.focus('#paletteSelect'); await p.keyboard.press('Control+z'); await p.waitForTimeout(100);
-  eq(await p.evaluate(() => __pindou.S.paletteId), 'mard221', 'palette after Ctrl+Z');
+test('Ctrl+Z works while a dropdown has focus', async (p) => {
+  await stroke(p, 4);
+  await p.focus('#paletteView'); await p.keyboard.press('Control+z'); await p.waitForTimeout(100);
+  eq(await beads(p), 0, 'beads after Ctrl+Z');
 });
 
 // ---------- 1.2: sharing a design as a link ----------
@@ -1917,7 +1925,7 @@ test('check colors: the disputed codes are the ones the two lists visibly disagr
   for (const c of ['H13', 'A25', 'F11', 'G8']) assert(d.includes(c), c + ' missing');
   assert(!d.includes('H1'), 'the clear bead is never disputed');
 });
-test('check colors: a choice recolors that code in both palettes, keeps the design, and lasts', async (p) => {
+test('check colors: a choice recolors that code, keeps the design, and lasts', async (p) => {
   await stroke(p, 5);
   const before = await design(p);
   const d = await p.evaluate(() => __pindou.disputedColors()[0]); // A25
@@ -1931,10 +1939,6 @@ test('check colors: a choice recolors that code in both palettes, keeps the desi
   await p.click('#checkDialog button[value=done]');
   await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
   eq(await hexOf(p, d.code), pick, 'after a reload');
-  // the other palette uses it too
-  await p.selectOption('#paletteSelect', await p.evaluate(() => [...document.querySelectorAll('#paletteSelect option')].map((o) => o.value).find((v) => v !== __pindou.S.paletteId)));
-  await p.waitForTimeout(200);
-  eq(await hexOf(p, d.code), pick, 'in the other palette');
 });
 test('check colors: Back, Skip, and going back to the published colors', async (p) => {
   const d = await p.evaluate(() => __pindou.disputedColors());

@@ -6,8 +6,8 @@
   <title>Pindou Studio</title>
   <!-- Version: keep in sync with VERSION in js/app.js (tools/bump-version.sh does both). The ?v= on each
        script/style URL makes browsers fetch fresh files after an update instead of reusing cached ones. -->
-  <meta name="pindou-version" content="1.3.4">
-  <link rel="stylesheet" href="styles.css?v=1.3.4">
+  <meta name="pindou-version" content="1.4.0">
+  <link rel="stylesheet" href="styles.css?v=1.4.0">
 </head>
 <body>
   <header class="topbar">
@@ -114,7 +114,6 @@
 
       <div class="panel" data-panel="palette" id="panel-palette" role="tabpanel" aria-labelledby="tab-palette">
         <div class="row">
-          <select id="paletteSelect" aria-label="Palette"></select>
           <input id="paletteSearch" type="search" placeholder="Find code (e.g. A1, H7)" aria-label="Find color code">
         </div>
         <div class="row">
@@ -132,7 +131,8 @@
         <div class="row">
           <label class="check"><input type="checkbox" id="editOwned"> Edit my collection</label>
           <span class="grow"></span>
-          <button id="ownAll" class="small" hidden>All</button>
+          <button id="ownAll" class="small" hidden title="All 291 MARD colors">All</button>
+          <button id="own221" class="small" hidden title="The 221-color MARD retail set">221 set</button>
           <button id="ownNone" class="small" hidden>None</button>
         </div>
         <div class="row">
@@ -326,9 +326,9 @@
   <div id="printRoot" class="print-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><span id="toastText"></span><button id="toastClose" class="toast-close" type="button" hidden>Dismiss</button></div>
 
-  <script src="js/palettes.js?v=1.3.4"></script>
-  <script src="js/qrcodegen.js?v=1.3.4"></script>
-  <script src="js/color.js?v=1.3.4"></script>
-  <script src="js/app.js?v=1.3.4"></script>
+  <script src="js/palettes.js?v=1.4.0"></script>
+  <script src="js/qrcodegen.js?v=1.4.0"></script>
+  <script src="js/color.js?v=1.4.0"></script>
+  <script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>
