@@ -430,6 +430,7 @@
     if (!S.stroke) return;
     for (const [i, old] of S.stroke) { S.cells[i] = old; writePix(i); }
     S.stroke = null; pixDirty = true; requestDraw();
+    designChanged(); // a link made mid-stroke has beads that are now gone
   }
   // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
   function snapshot() { return { paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: S.cells.slice() }; }
@@ -471,6 +472,7 @@
   }
   // Restore a whole-design state, switching palette and tray size if it needs them.
   function applyState(st) {
+    designChanged();
     if (st.paletteId && st.paletteId !== S.paletteId) {
       setPalette(st.paletteId);
       $('#paletteSelect').value = st.paletteId;
@@ -1062,10 +1064,10 @@
   // on this computer (a local copy or the desktop install), then the public site.
   const PUBLIC_URL = 'https://dani-the-alien.github.io/pindou-studio/';
   // Addresses that only work on this computer: localhost (and *.localhost), 0.0.0.0 (as
-  // python -m http.server prints it), 127.x.x.x, ::1 and its IPv4-mapped form, file:.
+  // python -m http.server prints it), 127.x.x.x, ::1 and its IPv4-mapped form, [::] (as servers listening on all addresses print it), file:.
   function isLocalAddress(host, protocol) {
     return protocol === 'file:'
-      || /^(localhost\.?|.*\.localhost\.?|0\.0\.0\.0|127(\.\d+){3}|\[::1\]|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\])$/i.test(host);
+      || /^(localhost\.?|.*\.localhost\.?|0\.0\.0\.0|\[::\]|127(\.\d+){3}|\[::1\]|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\])$/i.test(host);
   }
   function shareBase() {
     return isLocalAddress(location.hostname, location.protocol) ? PUBLIC_URL : location.href.split('#')[0];
@@ -1079,9 +1081,10 @@
     if (linkCache.rev === rev) return Promise.resolve(linkCache.url);
     if (linkCache.pendingRev === rev) return linkCache.pending;
     const d = serialize();
-    linkCache.pendingRev = rev;
+    linkCache.pendingRev = S.stroke ? -1 : rev;
+    const midStroke = !!S.stroke; // not kept: the stroke may yet be cancelled
     linkCache.pending = packDesign(d).then((p) => shareBase() + '#' + LINK_KEY + p, () => null).then((url) => {
-      if (designRev === rev) { linkCache.rev = rev; linkCache.url = url; }
+      if (designRev === rev && !midStroke) { linkCache.rev = rev; linkCache.url = url; }
       return url;
     });
     return linkCache.pending;
@@ -1190,7 +1193,7 @@
     box.hidden = false;
     // Every module the same whole number of screen pixels: a stretched code scans badly.
     const dpr = window.devicePixelRatio || 1, n = qr.size + 8;
-    const room = Math.min(340, box.clientWidth || 340);
+    const room = Math.min(480, box.clientWidth || 340);
     const k = Math.max(1, Math.floor(room * dpr / n));
     const c = qrCanvas(qr, k);
     c.style.width = c.style.height = `${(n * k) / dpr}px`;
