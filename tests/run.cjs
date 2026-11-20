@@ -196,22 +196,37 @@ test('files and links from before the single palette open with every color', asy
   });
   eq(r, ['mard', 'T1', 'Y5', 0], 'old link');
 });
-test('My collection carries over from before, and has a 221-set preset', async (p) => {
-  await p.evaluate(() => {
-    // as on the first load of this version: storage from before, and nothing saved since
-    __pindou.tab.state = 'paused'; __pindou.tab.editing = false;
-    localStorage.removeItem('pindou.owned.mard');
-    localStorage.setItem('pindou.owned.mard221', JSON.stringify(['A1', 'A2']));
-    localStorage.setItem('pindou.owned.mard291', JSON.stringify(['P1']));
-    const a = JSON.parse(localStorage.getItem('pindou.autosave') || '{}'); a.palette = 'mard291'; localStorage.setItem('pindou.autosave', JSON.stringify(a));
-  });
+async function asBefore14(p, storage) { // reload as the first load of this version, with storage from 1.3
+  await p.evaluate((storage) => {
+    __pindou.tab.state = 'paused'; __pindou.tab.editing = false; // nothing saved on the way out
+    for (const k of ['pindou.owned.mard', 'pindou.owned.mard221', 'pindou.owned.mard291', 'pindou.autosave']) localStorage.removeItem(k);
+    for (const [k, v] of Object.entries(storage)) localStorage.setItem(k, JSON.stringify(v));
+  }, storage);
   await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
-  eq(await p.evaluate(() => [...__pindou.S.owned]), ['P1'], 'the last-used palette\'s collection');
-  await p.check('#editOwned'); await p.click('#own221');
-  eq(await p.evaluate(() => __pindou.S.owned.size), 221, '221 set');
-  assert(!(await p.evaluate(() => __pindou.S.owned.has('P1'))), 'P1 isn\'t in the 221 set');
-  await p.click('#ownAll');
-  eq(await p.evaluate(() => __pindou.S.owned.size), 291, 'all');
+  return p.evaluate(() => [...__pindou.S.owned].sort());
+}
+test('My collection carries over from before 1.4, and has a 221-set preset', async (p) => {
+  const auto = (palette) => ({ format: 'pindou-studio', version: 1, name: 'x', palette, tray: 52, w: 1, h: 1, legend: [], cells: [-1] });
+  eq(await asBefore14(p, { 'pindou.autosave': auto('mard291'), 'pindou.owned.mard221': ['A1', 'A2'], 'pindou.owned.mard291': ['P1'] }), ['P1'], 'the last palette\'s saved collection');
+  eq((await asBefore14(p, { 'pindou.autosave': auto('mard221') })).length, 221, 'never customised on MARD 221: the 221 set');
+  eq((await asBefore14(p, { 'pindou.autosave': auto('mard221'), 'pindou.owned.mard291': ['P1'] })).length, 221, 'on MARD 221 with only a 291 list saved: the 221 set');
+  eq((await asBefore14(p, { 'pindou.autosave': auto('mard291') })).length, 291, 'never customised on MARD 291: all');
+  eq((await asBefore14(p, {})).length, 291, 'new here: all');
+  // kept, so it doesn't change once the autosave is rewritten
+  await p.reload(); await p.waitForFunction(() => window.__pindou);
+  await asBefore14(p, { 'pindou.autosave': auto('mard221') });
+  await p.evaluate(() => { __pindou.tab.state = 'editing'; __pindou.tab.editing = true; }); await stroke(p, 2); await p.waitForTimeout(500);
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await p.evaluate(() => __pindou.S.owned.size), 221, 'after the autosave is rewritten');
+  await p.check('#editOwned'); await p.click('#ownAll');
+  eq(await p.evaluate(() => __pindou.S.owned.size), 291, 'All');
+  await p.click('#own221');
+  eq(await p.evaluate(() => [__pindou.S.owned.size, __pindou.S.owned.has('P1')]), [221, false], '221 set');
+});
+test('saved designs name the palette so copies from before 1.4 open every bead', async (p) => {
+  await p.evaluate(() => { const S = __pindou.S; S.cells[0] = S.codeIndex.get('P1'); S.cells[1] = S.codeIndex.get('A1'); });
+  const d = await p.evaluate(() => __pindou.serialize());
+  eq([d.palette, d.legend], ['mard291', ['P1', 'A1']], 'palette name and codes');
 });
 test('a color correction while the image dialog has a result cannot apply a stale one', async (p) => {
   await p.click('[data-action=import-image]');
@@ -1028,7 +1043,7 @@ test('Use pattern during a conversion keeps the page responsive and applies the 
   eq(r.w, 260, 'applied width');
   assert(r.worst < 300, `page froze for ${r.worst} ms`);
 });
-test('cancelling the image dialog stops the conversion; a palette switch afterwards is safe', async (p) => {
+test('cancelling the image dialog stops the conversion', async (p) => {
   p.on('dialog', (d) => d.accept());
   await p.click('[data-action=import-image]');
   await p.setInputFiles('#imgFile', await makeImage(p, 900, 900));

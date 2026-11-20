@@ -200,15 +200,19 @@
   const OWNED_KEY = 'pindou.owned.mard';
   function loadOwned() {
     const all = S.palette.map((c) => c.code);
-    let list = store.get(OWNED_KEY, null);
-    if (!Array.isArray(list)) {
-      const last = (store.get('pindou.autosave', null) || {}).palette;
-      for (const old of [last, 'mard221', 'mard291']) {
-        const l = typeof old === 'string' && /^mard(221|291)$/.test(old) ? store.get('pindou.owned.' + old, null) : null;
-        if (Array.isArray(l)) { list = l; store.set(OWNED_KEY, list); break; }
-      }
-    }
-    return new Set(Array.isArray(list) ? list.filter((c) => typeof c === 'string') : all);
+    const list = store.get(OWNED_KEY, null);
+    if (Array.isArray(list)) return new Set(list.filter((c) => typeof c === 'string'));
+    // From before 1.4: the palette last used (the default was MARD 221) and its collection;
+    // a collection never saved meant "all of that palette's colors".
+    const auto = store.get('pindou.autosave', null);
+    const old221 = store.get('pindou.owned.mard221', null), old291 = store.get('pindou.owned.mard291', null);
+    if (!auto && !Array.isArray(old221) && !Array.isArray(old291)) return new Set(all); // new here: all 291
+    const last = auto && auto.palette === 'mard291' ? 'mard291' : 'mard221';
+    const saved = last === 'mard291' ? old291 : old221;
+    const set = Array.isArray(saved) ? saved.filter((c) => typeof c === 'string')
+      : last === 'mard291' ? all : PALETTES[S.paletteId].colors.filter((c) => c.in221).map((c) => c.code);
+    store.set(OWNED_KEY, set); // once: later the autosave says mard291 for everyone
+    return new Set(set);
   }
   // Make `id` the active palette. This does NOT touch the design: callers hand
   // applyState() cells that already refer to the new palette.
@@ -481,7 +485,7 @@
     S.stroke = null; pixDirty = true; requestDraw();
     designChanged(); // a link made mid-stroke has beads that are now gone
   }
-  // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
+  // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, a simpler version).
   function snapshot() { return { paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: S.cells.slice() }; }
   const UNDO_STEPS = 200, UNDO_BYTES = 64 * 1024 * 1024;
   const recBytes = (r) => (r.type === 'cells' ? r.idx.length * 8 : (r.before.cells.length + r.after.cells.length) * 2);
@@ -519,7 +523,7 @@
     rebuildPixmap();
     if (dimsChanged) fitView();
   }
-  // Restore a whole-design state, switching palette and tray size if it needs them.
+  // Restore a whole-design state, changing tray size (and palette, at start-up) if it needs them.
   function applyState(st) {
     designChanged();
     if (st.paletteId && st.paletteId !== S.paletteId) {
@@ -769,7 +773,7 @@
     if (done) {
       const fixed = check.list.filter((d) => fixFor(d.code));
       $('#checkSummaryText').textContent = fixed.length
-        ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, in both palettes, on this device.`
+        ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, on this device.`
         : 'No choices made: the colors are as published.';
       $('#checkReset').hidden = !fixed.length;
       // move focus only from the step that just ended (not when another tab's change re-renders it)
@@ -1139,6 +1143,11 @@
   }
 
   // ---------- persistence ----------
+  // Files, links and the autosave name the palette "mard291": the one palette has exactly
+  // that list's codes, so copies of Pindou Studio from before 1.4 (a tab still open, a
+  // cached page, someone else's) open them without losing any bead. Reading accepts
+  // mard, mard221 and mard291 (anything unknown also opens into the one palette, by code).
+  const SAVED_PALETTE = 'mard291';
   function serialize(from = S.cells) {
     const used = new Map(); const legend = [];
     const cells = new Array(from.length);
@@ -1148,7 +1157,7 @@
       if (!used.has(v)) { used.set(v, legend.length); legend.push(S.palette[v].code); }
       cells[i] = used.get(v);
     }
-    return { format: 'pindou-studio', version: 1, name: S.name, palette: S.paletteId, tray: S.tray, w: S.w, h: S.h, legend, cells };
+    return { format: 'pindou-studio', version: 1, name: S.name, palette: SAVED_PALETTE, tray: S.tray, w: S.w, h: S.h, legend, cells };
   }
   // Check a project file completely and turn it into a design state, without
   // changing anything. Throws a readable error for anything malformed.
@@ -1896,7 +1905,9 @@
     if (saved) {
       try {
         const { gen, savedAt, ...project } = saved;
-        if (JSON.stringify(project) !== JSON.stringify(serialize())) {
+        // (the palette's name differs between versions: compare the design itself)
+        const same = (d) => JSON.stringify({ ...d, palette: null });
+        if (same(project) !== same(serialize())) {
           const { state, name } = parseProject(project);
           S.focus = null;
           if (quiet) { applyState({ ...state, name }); S.name = name; requestDraw(); }

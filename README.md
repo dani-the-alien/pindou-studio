@@ -89,7 +89,7 @@ There is no official machine-readable MARD hex list; these values are community 
 
 They agree on 144 codes and differ on 77. Most differences are tiny (median ΔE2000 ≈ 0.75; 62 of the 77 are under 2). A few are large: H13, A25, F11 and G8 differ by ΔE2000 9.5–15.6. Several of those look like hex typos in one of the sources (H13 is `#F4EDF1` in one and `#F4EFD1` in the other), though it isn't known which side is right. Pindou Studio uses the 221-color list's value for each of its codes (and the 291-color list's for the rest), and keeps the other value too: where the two differ visibly (ΔE2000 > 3, 11 codes), **Check my colors** lets you pick the one that matches your real beads. For close calls, compare against a physical MARD color card.
 
-Until version 1.4 there were two palettes to switch between ("MARD 221" and "MARD 291"). Files, links and autosaves from then open into the single palette with every color intact, and a saved "My collection" is carried over.
+Until version 1.4 there were two palettes to switch between ("MARD 221" and "MARD 291"). Files, links and autosaves from then open into the single palette with every color intact, and "My collection" is carried over (one never changed on MARD 221 becomes the 221 set). Files, links and autosaves still name the palette "mard291", whose codes are exactly the single palette's, so older copies of Pindou Studio open them without losing beads.
 
 H1 is treated as the clear (transparent) bead and is never used when converting pictures.
 
