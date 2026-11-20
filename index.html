@@ -148,13 +148,14 @@
   </main>
 
   <!-- Another tab is editing: this one waits -->
-  <dialog id="tabDialog" aria-labelledby="tabTitle" aria-describedby="tabText">
+  <dialog id="tabDialog" closedby="none" aria-labelledby="tabTitle" aria-describedby="tabText">
     <div class="dlg">
       <h2 id="tabTitle">Open in another tab</h2>
       <p id="tabText"></p>
       <p class="hint">Only one tab edits at a time, so two tabs can't overwrite each other's work. If you close the other tab, this one carries on by itself.</p>
       <div class="dlg-actions">
-        <button type="button" class="primary" id="tabTake">Edit here instead</button>
+        <button type="button" class="primary" id="tabTake"><span id="tabTakeLabel">Edit here instead</span></button>
+        <button type="button" id="tabSave" hidden>Save a copy…</button>
       </div>
     </div>
   </dialog>

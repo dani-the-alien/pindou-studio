@@ -173,6 +173,7 @@
       $('#paletteSelect').value = S.paletteId;
       return;
     }
+    if (!tab.editing) { $('#paletteSelect').value = S.paletteId; return; } // lost editing during confirm()
     const cells = S.cells.map((v) => (v < 0 ? -1 : map[v]));
     replaceState({ ...snapshot(), paletteId: id, cells },
       lost.length ? `Switched to ${name}: ${fmt(lostBeads)} beads changed to the closest colors. Undo switches back.` : `Switched to ${name}`);
@@ -457,6 +458,7 @@
     loadGrid(st); // refits the view only if the size changed
   }
   function replaceState(next, label) {
+    if (!tab.editing) return; // e.g. a file picker or confirm() that finished after another tab took over
     const before = snapshot();
     applyState(next);
     pushUndo({ type: 'snap', before, after: snapshot() });
@@ -508,6 +510,7 @@
 
   viewport.addEventListener('contextmenu', (e) => e.preventDefault());
   viewport.addEventListener('pointerdown', (e) => {
+    if (!tab.editing) return; // another tab is editing (or this one is still starting)
     viewport.setPointerCapture(e.pointerId);
     const p = localPt(e);
     pointers.set(e.pointerId, p);
@@ -570,6 +573,7 @@
     }
   });
   function runTapTool(g) {
+    if (!tab.editing) return;
     beginStroke();
     if (g.tool === 'fill') floodFill(g.cell.i, S.color, S.focus ? trayRect(S.focus.r, S.focus.c) : null);
     else replaceAll(S.cells[g.cell.i], S.color);
@@ -675,7 +679,7 @@
   // ---------- panels ----------
   let panelTimer;
   function changed() {
-    if (booted) dirty = true;
+    if (booted && tab.editing) { dirty = true; tab.everEdited = true; }
     requestDraw();
     renderStatus();
     clearTimeout(panelTimer);
@@ -858,114 +862,215 @@
   }
   function flushAutosave() {
     clearTimeout(saveTimer);
-    if (!dirty || !tab.editing) return;
-    store.set('pindou.autosave', serialize());
-    dirty = false;
+    if (!dirty || !tab.editing || tab.otherEditorAt > tab.gainedAt) return;
+    saveNow();
   }
 
   // ---------- one editing tab at a time ----------
-  // All tabs share one autosave, so only the tab holding the "editor" lock may
-  // change the design. Another tab shows a blocking notice; "Edit here instead"
-  // steals the lock, and the tab that loses it saves, tells the new one it's done
-  // (so the new one loads the latest work, not an older autosave), and waits. A
-  // waiting tab also takes over by itself when the editing tab closes.
-  // Without Web Locks (very old browsers) every tab edits, as before.
-  const tab = { editing: true, blocked: false, waiting: null, chan: null, released: null };
-  const LOCK = 'pindou.editor';
-  // onAnswer(true|false) runs as soon as the browser grants or (ifAvailable) refuses.
+  // All tabs share one autosave, so only the tab holding the "editor" lock may change
+  // the design or write the autosave. Any other tab shows a notice that can't be
+  // dismissed. Taking over is cooperative: the paused tab asks, the editing tab stops,
+  // saves (while it still holds the lock), sends its design over the BroadcastChannel
+  // and lets go. Only if it doesn't answer within a few seconds (frozen, or stuck in a
+  // confirm/prompt/print dialog) is the lock stolen, and a tab that had the lock
+  // stolen never writes anything afterwards. Autosaves carry a timestamp, so whoever
+  // takes over uses the newest copy, whether it came by message or from storage.
+  // Only a visible paused tab waits in line, so a reload doesn't hand editing to a
+  // background tab. Without Web Locks (very old browsers) every tab edits, as before.
+  const LOCK = 'pindou.editor', TAKE_TIMEOUT = 2500, PAYLOAD_WAIT = 400;
+  const tab = {
+    editing: true,     // may this tab change the design and write the autosave?
+    state: 'off',      // off (no Web Locks) | starting | editing | paused | taking
+    id: Math.random().toString(36).slice(2),
+    chan: null, release: null, waiting: null, takeTimer: null, payload: null, lostUnsaved: false,
+    gainedAt: 0, otherEditorAt: 0,
+  };
+  const newest = (a, b) => (!a ? b : !b ? a : (b.savedAt || 0) > (a.savedAt || 0) ? b : a);
   function lockRequest(opts, onAnswer) {
-    let granted = false;
+    let answered = false, granted = false;
     navigator.locks.request(LOCK, opts, (lock) => {
+      answered = true;
       if (onAnswer) onAnswer(!!lock);
       if (!lock) return null;
       granted = true;
-      onLockGained(!!opts.steal);
-      return new Promise(() => {}); // held until this tab closes or the lock is stolen
-    }).catch(() => { if (granted) onLockLost(); }); // stolen, or our own wait was cancelled
+      return new Promise((release) => { tab.release = release; onLockGained(); });
+    }).catch(() => {
+      if (granted) onLockStolen();
+      else if (!answered && !opts.signal) noLocking(); // the browser refused Web Locks here
+    });
   }
+  function noLocking() { tab.state = 'off'; tab.editing = true; hideTabNotice(); if (tab.ready) tab.ready(); }
   function waitForLock() {
-    if (tab.waiting) return;
+    if (tab.waiting || document.visibilityState !== 'visible') return;
     tab.waiting = new AbortController();
     lockRequest({ signal: tab.waiting.signal });
   }
-  function onLockGained(stole) {
-    if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; }
-    tab.editing = true;
-    if (tab.starting) { takeLatest(true); return; } // freed up just after start
-    if (!tab.blocked) return; // first start: nothing to take over
-    // Give the tab we took over from a moment to save, then load the latest work.
-    const done = () => { tab.released = null; takeLatest(); hideTabNotice(); };
-    if (!stole || !tab.chan) { done(); return; }
-    const t = setTimeout(done, 1000);
-    tab.released = () => { clearTimeout(t); done(); };
+  function stopWaiting() { if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; } }
+  function post(msg) { if (tab.chan) tab.chan.postMessage({ ...msg, from: tab.id }); }
+  function saveNow() {
+    const project = { ...serialize(), savedAt: Date.now() };
+    store.set('pindou.autosave', project);
+    dirty = false;
+    return project;
   }
-  function onLockLost() {
-    if (!tab.editing) return;
+  // Stop whatever this tab is in the middle of, without applying it.
+  function stopInteraction() {
     if (S.stroke) cancelStroke();
+    for (const id of pointers.keys()) { try { viewport.releasePointerCapture(id); } catch { /* already released */ } }
+    pointers.clear(); gesture = null; viewport.classList.remove('panning');
     $$('dialog[open]').forEach((d) => { if (d.id !== 'tabDialog') d.close('cancel'); });
     if (!$('#exportMenu').hidden) closeMenu(false);
-    dirty = true; flushAutosave(); // always hand over the latest, even if unchanged
-    tab.editing = false;
-    if (tab.chan) tab.chan.postMessage({ type: 'released' });
-    showTabNotice('You started editing in another tab, so this one is paused. Your work here was saved and carried over.');
+    clearTimeout(saveTimer);
+  }
+  function onLockGained() {
+    stopWaiting();
+    clearTimeout(tab.takeTimer);
+    const was = tab.state;
+    tab.gainedAt = Date.now();
+    if (was === 'starting' && !tab.waitedAtStart) { becomeEditor(); if (tab.ready) tab.ready(); return; }
+    // Taking over: use the newest design, waiting a moment for the one the other tab sent.
+    const finish = () => {
+      clearTimeout(tab.payloadTimer); tab.payloadWaiter = null;
+      const latest = newest(store.get('pindou.autosave', null), tab.payload);
+      tab.payload = null;
+      becomeEditor();
+      takeLatest(latest, was === 'starting');
+      hideTabNotice();
+      if (tab.ready) tab.ready();
+    };
+    if (tab.payload) finish();
+    else { tab.payloadWaiter = finish; tab.payloadTimer = setTimeout(finish, PAYLOAD_WAIT); }
+  }
+  function becomeEditor() {
+    tab.state = 'editing'; tab.editing = true; tab.everEdited = true;
+    post({ type: 'editing' });
+  }
+  // Another tab asked to take over: stop, save while still holding the lock, send the
+  // design, then let go.
+  // `at` is when the other tab asked. If this tab was too busy to answer before the
+  // other one gives up and takes the lock anyway, it pauses without writing anything.
+  function handOver(at) {
+    if (tab.state !== 'editing' || !tab.release) return;
+    const late = Date.now() - at > TAKE_TIMEOUT - 300;
+    stopInteraction();
+    tab.lostUnsaved = late && dirty;
+    if (!late) post({ type: 'handover', project: saveNow() });
+    tab.state = 'paused'; tab.editing = false;
+    const release = tab.release; tab.release = null; release();
+    showTabNotice();
     waitForLock();
   }
-  // Load the autosave if another tab changed it. One undo step, so Undo goes back
-  // to what this tab had before.
-  function takeLatest(quiet) {
-    const saved = store.get('pindou.autosave', null);
+  // The lock was taken without asking (this tab didn't answer in time). Write nothing:
+  // the other tab already has the newest saved copy.
+  function onLockStolen() {
+    if (tab.state !== 'editing') return;
+    tab.release = null;
+    tab.lostUnsaved = dirty;
+    stopInteraction();
+    tab.state = 'paused'; tab.editing = false;
+    showTabNotice();
+    waitForLock();
+  }
+  function requestTakeover() {
+    if (tab.state !== 'paused') return;
+    tab.state = 'taking';
+    $('#tabTake').disabled = true;
+    $('#tabTakeLabel').textContent = 'Taking over…';
+    post({ type: 'request', at: Date.now() });
+    if (!tab.waiting) { tab.waiting = new AbortController(); lockRequest({ signal: tab.waiting.signal }); }
+    armTakeTimer();
+  }
+  function armTakeTimer() {
+    clearTimeout(tab.takeTimer);
+    tab.takeTimer = setTimeout(() => {
+      if (tab.state !== 'taking') return;
+      stopWaiting();
+      lockRequest({ steal: true });
+    }, TAKE_TIMEOUT);
+  }
+  function onMessage(e) {
+    const m = e.data;
+    if (!m || m.from === tab.id) return;
+    if ((m.type === 'handover' || m.type === 'closing') && m.project) {
+      tab.payload = newest(tab.payload, m.project);
+      if (tab.payloadWaiter) tab.payloadWaiter();
+    } else if (m.type === 'request') {
+      handOver(m.at || 0);
+    } else if (m.type === 'editing') {
+      // Someone else just became the editor. Older copies are no longer the newest;
+      // and if this tab was asking to take over, ask the new editor instead.
+      tab.payload = null;
+      tab.otherEditorAt = Date.now();
+      if (tab.state === 'taking') { post({ type: 'request', at: Date.now() }); armTakeTimer(); }
+    }
+  }
+  // Use the newest saved design if it differs from what this tab shows. One undo
+  // step, so Undo goes back to what this tab had before (except right at start-up).
+  function takeLatest(saved, quiet) {
     let msg = 'Editing in this tab now.';
     if (saved) {
       try {
-        const { state, name } = parseProject(saved);
-        const next = { ...state, name };
-        const cur = snapshot();
-        const same = next.paletteId === cur.paletteId && next.tray === cur.tray && next.name === cur.name &&
-          next.w === cur.w && next.h === cur.h && next.cells.every((v, i) => v === cur.cells[i]);
-        if (!same) {
+        const { savedAt, ...project } = saved;
+        if (JSON.stringify(project) !== JSON.stringify(serialize())) {
+          const { state, name } = parseProject(project);
           S.focus = null;
-          if (quiet) { S.focus = null; applyState(next); S.name = name; changed(); refreshPanels(); } else replaceState(next);
+          if (quiet) { applyState({ ...state, name }); S.name = name; refreshPanels(); requestDraw(); }
+          else replaceState({ ...state, name });
           msg = "Editing in this tab now, with the other tab's latest work. Undo goes back to what this tab had.";
         }
-      } catch { /* unreadable autosave: keep what this tab has */ }
+      } catch { /* unreadable: keep what this tab has */ }
     }
     if (!quiet) toast(msg);
   }
-  function showTabNotice(text) {
-    $('#tabText').textContent = text;
-    const d = $('#tabDialog');
+  function showTabNotice() {
     tab.blocked = true;
+    $('#tabText').textContent = tab.lostUnsaved
+      ? 'Editing moved to another tab while this one was busy, so the last changes made here were not saved. Save a copy if you need them.'
+      : tab.everEdited
+        ? 'You started editing in another tab, so this one is paused. Your work here was saved and carried over.'
+        : 'Pindou Studio is already open in another tab or window.';
+    $('#tabSave').hidden = !tab.lostUnsaved;
+    $('#tabTake').disabled = false;
+    $('#tabTakeLabel').textContent = 'Edit here instead';
+    const d = $('#tabDialog');
     if (!d.open) showDialog(d);
     $('#tabTake').focus();
   }
-  function hideTabNotice() { tab.blocked = false; const d = $('#tabDialog'); if (d.open) d.close(); }
+  function hideTabNotice() { tab.blocked = false; tab.lostUnsaved = false; const d = $('#tabDialog'); if (d.open) d.close(); }
   function initTabLock() {
     if (!(navigator.locks && navigator.locks.request)) return Promise.resolve();
-    tab.editing = false;
-    if ('BroadcastChannel' in window) {
-      tab.chan = new BroadcastChannel('pindou');
-      tab.chan.onmessage = (e) => { if (e.data && e.data.type === 'released' && tab.released) tab.released(); };
-    }
-    $('#tabDialog').addEventListener('cancel', (e) => e.preventDefault()); // Escape doesn't dismiss it
-    $('#tabTake').addEventListener('click', () => {
-      if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; }
-      lockRequest({ steal: true });
+    tab.state = 'starting'; tab.editing = false;
+    if ('BroadcastChannel' in window) { tab.chan = new BroadcastChannel('pindou'); tab.chan.onmessage = onMessage; }
+    const d = $('#tabDialog');
+    d.addEventListener('cancel', (e) => e.preventDefault());
+    // Browsers let repeated Escape presses close a modal anyway: put it straight back.
+    d.addEventListener('close', () => { if (tab.blocked) setTimeout(() => { if (tab.blocked && !d.open) showDialog(d); }, 0); });
+    $('#tabTake').addEventListener('click', requestTakeover);
+    $('#tabSave').addEventListener('click', saveProject);
+    document.addEventListener('visibilitychange', () => {
+      if (tab.state !== 'paused') return;
+      if (document.visibilityState === 'visible') waitForLock(); else stopWaiting();
     });
+    // Closing the editing tab: send the newest design to whoever takes over next.
+    // The editing tab always saves when it's hidden or closed, even without changes,
+    // so storage ends up with its copy whatever else happened.
+    const isEditor = () => tab.state === 'editing' && !(tab.otherEditorAt > tab.gainedAt);
+    window.addEventListener('pagehide', () => { if (isEditor()) post({ type: 'closing', project: saveNow() }); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && isEditor()) saveNow(); });
     return new Promise((ready) => {
+      tab.ready = () => { tab.ready = null; ready(); };
       lockRequest({ ifAvailable: true }, (got) => {
-        if (!got) {
-          // On a reload the old page may not have let go yet: wait a moment before
-          // showing the notice, and take over quietly if the lock frees up meanwhile.
-          tab.starting = true;
-          waitForLock();
-          setTimeout(() => {
-            tab.starting = false;
-            if (!tab.editing) showTabNotice('Pindou Studio is already open in another tab or window.');
-            ready();
-          }, 500);
-          return;
-        }
-        ready();
+        if (got) return; // onLockGained finishes start-up
+        tab.waitedAtStart = true;
+        // On a reload the old page may not have let go yet: wait a moment before
+        // showing the notice, and take over quietly if the lock frees up meanwhile.
+        waitForLock();
+        setTimeout(() => {
+          if (tab.state !== 'starting') return;
+          tab.state = 'paused';
+          showTabNotice();
+          if (tab.ready) tab.ready();
+        }, 500);
       });
     });
   }
@@ -1525,13 +1630,17 @@
     $$('dialog').forEach((dlg) => dlg.addEventListener('close', () => {
       if ($('#toast').parentElement === dlg) moveToast(document.body);
     }));
-    $('#projectName').addEventListener('input', (e) => { S.name = e.target.value; dirty = true; autosave(); });
+    $('#projectName').addEventListener('input', (e) => {
+      if (!tab.editing) { e.target.value = S.name; return; }
+      S.name = e.target.value; dirty = true; autosave();
+    });
 
     $('#traySize').addEventListener('change', (e) => {
       if (e.target.value === 'custom') {
         const v = parseInt(prompt('Pegs per side for one tray (5–300):', String(S.tray)), 10);
-        if (v >= 5 && v <= 300) setTraySize(v); else e.target.value = String(S.tray);
-      } else setTraySize(+e.target.value);
+        if (v >= 5 && v <= 300 && tab.editing) setTraySize(v); else e.target.value = String(S.tray);
+      } else if (tab.editing) setTraySize(+e.target.value);
+      else e.target.value = String(S.tray);
     });
     $('#guides').addEventListener('change', (e) => { S.guides = +e.target.value; savePrefs(); requestDraw(); });
     $('#showCodes').addEventListener('change', (e) => { S.showCodes = e.target.checked; savePrefs(); requestDraw(); });
@@ -1694,8 +1803,8 @@
       const k = e.key.toLowerCase();
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       // Ctrl+S saves the project from anywhere, including while typing its name.
+      if (!tab.editing) { if ((e.ctrlKey || e.metaKey) && k === 's') e.preventDefault(); return; } // another tab is editing
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
-      if (!tab.editing) return; // another tab is editing (or this one is still starting)
       if (e.target.closest('dialog')) return;
       // Text fields keep their own undo; dropdowns and checkboxes don't have one.
       const typing = e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]), textarea, [contenteditable]');

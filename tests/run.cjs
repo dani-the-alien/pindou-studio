@@ -322,34 +322,48 @@ async function secondTab(p) {
   return t;
 }
 const tabState = (t) => t.evaluate(() => ({ editing: __pindou.tab.editing, notice: document.querySelector('#tabDialog').open }));
-test('a second tab is blocked while the first one edits', async (p) => {
+const savedBeads = (t) => t.evaluate(() => { const a = JSON.parse(localStorage.getItem('pindou.autosave') || 'null'); return a ? a.cells.filter((v) => v >= 0).length : null; });
+const undoLen = (t) => t.evaluate(() => __pindou.S.undo.length);
+async function stroke(t, n) { // a horizontal stroke of n beads on row 2
+  await t.click('[data-tool=pencil]');
+  await t.mouse.move(...await cellPoint(t, 2, 2)); await t.mouse.down();
+  await t.mouse.move(...await cellPoint(t, 1 + n, 2), { steps: 5 }); await t.mouse.up();
+}
+// Headless pages all count as visible; make one look like a background tab.
+const hide = (t) => t.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
+
+test('a second tab is paused: no drawing, no keyboard edits, no saving; Escape cannot dismiss the notice', async (p) => {
+  await stroke(p, 10); await p.waitForTimeout(500); // let the autosave land before the second tab opens
   const t2 = await secondTab(p);
   eq(await tabState(p), { editing: true, notice: false }, 'first tab');
   eq(await tabState(t2), { editing: false, notice: true }, 'second tab');
-  await t2.keyboard.press('Escape');
-  eq(await tabState(t2), { editing: false, notice: true }, 'Escape does not dismiss the notice');
+  for (let k = 0; k < 3; k++) await t2.keyboard.press('Escape'); // browsers let repeated Escape close a modal
+  await t2.waitForTimeout(50);
+  eq(await tabState(t2), { editing: false, notice: true }, 'notice after Escape ×3');
   await t2.keyboard.press('Control+z');
-  // a blocked tab never writes the autosave, even when it closes
-  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
-  await p.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  eq(await beads(t2), 10, 'Ctrl+Z changed the paused tab');
+  // try to change the paused tab's design and name directly, then close it
+  await t2.evaluate(() => { const n = document.querySelector('#projectName'); n.value = 'from paused tab'; n.dispatchEvent(new Event('input')); });
   await t2.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-  const n = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')).cells.filter((v) => v >= 0).length);
-  eq(n, 52 * 52, 'beads in autosave');
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')));
+  assert(saved.name !== 'from paused tab', 'paused tab renamed the design');
+  eq(saved.cells.filter((v) => v >= 0).length, 10, 'beads in autosave');
+  eq(t2.errors, [], 'page errors');
 });
-test('"Edit here instead" moves editing to the second tab with the latest work', async (p) => {
+test('"Edit here instead" hands over quickly with the latest work, and back again', async (p) => {
   const t2 = await secondTab(p);
-  // draw in the first tab and take over straight away, before its autosave timer fires
-  await p.mouse.move(...await cellPoint(p, 2, 2)); await p.mouse.down();
-  await p.mouse.move(...await cellPoint(p, 20, 2), { steps: 5 }); await p.mouse.up();
+  await stroke(p, 19); // and take over at once, before the first tab's autosave timer fires
+  const t0 = Date.now();
   await t2.click('#tabTake');
   await t2.waitForFunction(() => !document.querySelector('#tabDialog').open);
+  const ms = Date.now() - t0;
+  assert(ms < 700, `hand-over took ${ms} ms`);
   eq(await beads(t2), 19, 'second tab has the first tab\'s stroke');
+  eq(await savedBeads(t2), 19, 'autosave');
   eq(await tabState(t2), { editing: true, notice: false }, 'second tab after taking over');
-  eq(await tabState(p), { editing: false, notice: true }, 'first tab after losing it');
-  // Undo in the new tab goes back to what it had before taking over
-  await t2.keyboard.press('Control+z'); eq(await beads(t2), 0, 'undo in second tab');
-  await t2.keyboard.press('Control+Shift+z'); eq(await beads(t2), 19, 'redo in second tab');
-  // and back again
+  eq(await tabState(p), { editing: false, notice: true }, 'first tab after handing over');
+  await t2.keyboard.press('Control+z'); eq(await beads(t2), 0, 'undo goes back to what the second tab had');
+  await t2.keyboard.press('Control+Shift+z'); eq(await beads(t2), 19, 'redo');
   await t2.click('[data-tool=fill]'); await t2.mouse.click(...await cellPoint(t2, 30, 30));
   await p.click('#tabTake');
   await p.waitForFunction(() => !document.querySelector('#tabDialog').open);
@@ -357,12 +371,53 @@ test('"Edit here instead" moves editing to the second tab with the latest work',
   eq(await tabState(t2), { editing: false, notice: true }, 'second tab paused again');
   eq([...p.errors, ...t2.errors], [], 'page errors');
 });
-test('closing the editing tab lets the waiting tab carry on by itself', async (p) => {
+test('double-clicking "Edit here instead" cannot lose the other tab\'s work', async (p) => {
+  const t2 = await secondTab(p);
+  await stroke(p, 19);
+  await t2.dblclick('#tabTake').catch(() => {});
+  await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t2.waitForTimeout(1500);
+  eq([await beads(t2), await savedBeads(t2)], [19, 19], 'beads in the new tab and in the autosave');
+});
+test('a tab that is busy when another takes over never overwrites the new tab\'s work', async (p) => {
+  await stroke(p, 1); await p.waitForTimeout(500);
+  const t2 = await secondTab(p);
+  // the first tab is stuck for 3.5 s (like a confirm() or print dialog)
+  await p.evaluate(() => { setTimeout(() => { const t = performance.now(); while (performance.now() - t < 3500); }, 0); });
+  await p.waitForTimeout(50).catch(() => {});
+  await t2.click('#tabTake');
+  await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open, null, { timeout: 6000 });
+  await t2.click('[data-tool=fill]'); await t2.mouse.click(...await cellPoint(t2, 30, 30));
+  await t2.waitForTimeout(500);
+  eq(await savedBeads(t2), 52 * 52, 'autosave after the new tab\'s fill');
+  await p.waitForFunction(() => document.querySelector('#tabDialog').open, null, { timeout: 8000 }); // the busy tab woke up and paused
+  await p.waitForTimeout(800);
+  eq(await savedBeads(t2), 52 * 52, 'autosave after the busy tab woke up');
+  await t2.close({ runBeforeUnload: true });
+  eq(await savedBeads(p), 52 * 52, 'autosave after the new tab closed');
+});
+test('a stroke or fill in progress when the tab loses editing is not applied', async (p) => {
+  const t2 = await secondTab(p);
+  await p.click('[data-tool=fill]');
+  await p.mouse.move(...await cellPoint(p, 30, 30)); await p.mouse.down();
+  await t2.click('#tabTake'); await t2.waitForFunction(() => __pindou.tab.editing);
+  await p.mouse.up();
+  await p.click('[data-tool=pencil]').catch(() => {}); // blocked by the notice
+  eq([await beads(p), await undoLen(p)], [0, 0], 'paused tab after mouse-up');
+});
+test('closing the editing tab lets a visible waiting tab carry on by itself', async (p) => {
   const t2 = await secondTab(p);
   await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
   await p.close({ runBeforeUnload: true });
   await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open, null, { timeout: 5000 });
   eq(await beads(t2), 52 * 52, 'waiting tab picked up the closed tab\'s work');
+});
+test('reloading the editing tab keeps editing there, not in a background tab', async (p) => {
+  const t2 = await secondTab(p);
+  await hide(t2);
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await tabState(p), { editing: true, notice: false }, 'reloaded tab');
+  eq(await tabState(t2), { editing: false, notice: true }, 'background tab');
 });
 test('losing the tab closes an open dialog without applying it', async (p) => {
   const t2 = await secondTab(p);
@@ -371,11 +426,12 @@ test('losing the tab closes an open dialog without applying it', async (p) => {
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
   await t2.click('#tabTake');
   await p.waitForFunction(() => document.querySelector('#tabDialog').open);
-  eq(await p.evaluate(() => [document.querySelector('#imageDialog').open, __pindou.S.w]), [false, 52], 'image dialog closed, design unchanged');
+  eq(await p.evaluate(() => document.querySelector('#imageDialog').open), false, 'image dialog closed');
+  eq([await beads(p), await undoLen(p)], [0, 0], 'pattern not applied');
 });
 test('a long conversion shows a progress card; a quick one does not', async (p) => {
   await p.click('[data-action=import-image]');
-  const quick = await p.evaluate(() => { window.__sawBusy = false; new MutationObserver(() => { if (!document.querySelector('#imgBusy').hidden) window.__sawBusy = true; }).observe(document.querySelector('#imgBusy'), { attributes: true }); });
+  await p.evaluate(() => { window.__sawBusy = false; new MutationObserver(() => { if (!document.querySelector('#imgBusy').hidden) window.__sawBusy = true; }).observe(document.querySelector('#imgBusy'), { attributes: true }); });
   await p.setInputFiles('#imgFile', await makeImage(p, 60, 60));
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
   eq(await p.evaluate(() => window.__sawBusy), false, 'card flashed on a quick conversion');
