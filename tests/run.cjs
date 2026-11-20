@@ -1868,6 +1868,62 @@ test('wheel: a high-resolution wheel zooms in proportion, not a full step per ev
   assert(Math.abs(one - two) < 0.01, `one notch ${one.toFixed(3)}× vs two halves ${two.toFixed(3)}×`);
 });
 
+// ---------- 1.3: check my colors ----------
+const hexOf = (p, code) => p.evaluate((code) => { const S = __pindou.S; return S.palette[S.codeIndex.get(code)].hex; }, code);
+test('check colors: the disputed codes are the ones the two lists visibly disagree about', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors().map((x) => x.code));
+  eq(d.length, 11, 'how many: ' + d.join(' '));
+  for (const c of ['H13', 'A25', 'F11', 'G8']) assert(d.includes(c), c + ' missing');
+  assert(!d.includes('H1'), 'the clear bead is never disputed');
+});
+test('check colors: a choice recolors that code in both palettes, keeps the design, and lasts', async (p) => {
+  await stroke(p, 5);
+  const before = await design(p);
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]); // A25
+  const now = await hexOf(p, d.code), pick = d.hexes.find((h) => h !== now);
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  eq(await p.textContent('#checkStep'), `Bead 1 of 11: ${d.code}`, 'first step');
+  await p.click(`#checkPair [data-hex="${pick}"]`);
+  eq(await hexOf(p, d.code), pick, 'color in this palette');
+  assert(/Bead 2 of 11/.test(await p.textContent('#checkStep')), 'moved on');
+  eq(await design(p), before, 'design');
+  await p.click('#checkDialog button[value=done]');
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await hexOf(p, d.code), pick, 'after a reload');
+  // the other palette uses it too
+  await p.selectOption('#paletteSelect', await p.evaluate(() => [...document.querySelectorAll('#paletteSelect option')].map((o) => o.value).find((v) => v !== __pindou.S.paletteId)));
+  await p.waitForTimeout(200);
+  eq(await hexOf(p, d.code), pick, 'in the other palette');
+});
+test('check colors: Back, Skip, and going back to the published colors', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors());
+  const pub0 = await hexOf(p, d[0].code);
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  const pick = d[0].hexes.find((h) => h !== pub0);
+  await p.click(`#checkPair [data-hex="${pick}"]`);
+  await p.click('#checkBack');
+  eq(await p.getAttribute(`#checkPair [data-hex="${pick}"]`, 'aria-pressed'), 'true', 'Back shows the choice');
+  for (let k = 0; k < 11; k++) await p.click('#checkSkip');
+  assert(!(await p.evaluate(() => document.querySelector('#checkSummary').hidden)), 'no summary at the end');
+  assert((await p.textContent('#checkSummaryText')).includes(d[0].code), 'summary lists the choice');
+  await p.click('#checkReset');
+  eq(await hexOf(p, d[0].code), pub0, 'published color again');
+  eq(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')), '{}', 'stored corrections');
+});
+test('check colors: stored corrections that aren\'t candidate colors are ignored', async (p) => {
+  await p.evaluate(() => localStorage.setItem('pindou.colorFixes', JSON.stringify({ A1: '#000000', H13: '#123456', H1: '#FFFFFF' })));
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  const pal = await p.evaluate(() => { const id = __pindou.S.paletteId; return Object.fromEntries(PALETTES[id].colors.filter((c) => ['A1', 'H13', 'H1'].includes(c.code)).map((c) => [c.code, c.hex])); });
+  for (const code of ['A1', 'H13', 'H1']) eq(await hexOf(p, code), pal[code], code);
+});
+test('check colors: a choice in one tab recolors another open tab', async (p) => {
+  const t = await secondTab(p);
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]);
+  const now = await hexOf(t, d.code), other = d.hexes.find((h) => h !== now);
+  await p.click('#checkColors'); await p.click(`#checkPair [data-hex="${other}"]`);
+  await t.waitForFunction(([c, h]) => __pindou.S.palette[__pindou.S.codeIndex.get(c)].hex === h, [d.code, other], { timeout: 3000 });
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';
