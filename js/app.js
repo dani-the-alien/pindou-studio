@@ -237,7 +237,7 @@
 
   function resizeCanvas() {
     const r = viewport.getBoundingClientRect();
-    document.documentElement.style.setProperty('--below-canvas', Math.max(0, innerHeight - r.bottom) + 'px');
+    updateBelowCanvas();
     // Hidden (printing, a collapsed layout): keep the view as it is for when it's back.
     if (!r.width || !r.height) return;
     dpr = window.devicePixelRatio || 1;
@@ -255,6 +255,14 @@
     canvas.width = Math.max(1, Math.round(vw * dpr));
     canvas.height = Math.max(1, Math.round(vh * dpr));
     if (refit) fitView(); else requestDraw();
+  }
+  // Messages on phones sit just above the controls at the bottom of the screen.
+  let belowCanvas = -1;
+  function updateBelowCanvas() {
+    const bar = $('.sheet-bar'), tb = $('.toolbar');
+    const tops = [bar, tb].map((el) => el && el.getBoundingClientRect()).filter((r) => r && r.height).map((r) => r.top);
+    const v = tops.length ? Math.max(0, Math.round(innerHeight - Math.min(...tops))) : 0;
+    if (v !== belowCanvas) { belowCanvas = v; document.documentElement.style.setProperty('--below-canvas', v + 'px'); }
   }
   function requestDraw() {
     if (drawQueued) return;
@@ -682,7 +690,9 @@
   let quickCounts = null;
   function renderQuick(recount) {
     if (recount || !quickCounts || quickCounts.length !== S.palette.length) quickCounts = countRegion();
-    keepFocus($('#quickColors'), 'data-q', buildQuick);
+    const box = $('#quickColors'), had = box.contains(document.activeElement);
+    keepFocus(box, 'data-q', buildQuick);
+    if (had && !box.contains(document.activeElement)) { const cur = $('[data-q=current]', box); if (cur) cur.focus(); }
   }
   function quickSwatch(c, extra) {
     const b = document.createElement('button');
@@ -699,7 +709,7 @@
     if (!cur) return;
     const cb = quickSwatch(cur, ' current');
     cb.dataset.q = 'current';
-    cb.setAttribute('aria-label', `Current color ${cur.code}. Show all colors`);
+    cb.setAttribute('aria-label', sheetMode() ? `Current color ${cur.code}. Show all colors` : `Current color ${cur.code}`);
     cb.title = `${cur.code} ${cur.hex}`;
     box.appendChild(cb);
     const add = (i, label) => {
@@ -715,22 +725,27 @@
     const recent = S.recent.map((k) => S.codeIndex.get(k)).filter((i) => i != null && i !== S.color).slice(0, 6);
     recent.forEach((i) => add(i, `, recently used${n(i)}`));
     const used = [];
-    for (let i = 0; i < quickCounts.length; i++) if (quickCounts[i] && !recent.includes(i)) used.push(i);
+    for (let i = 0; i < quickCounts.length; i++) if (quickCounts[i] && i !== S.color && !recent.includes(i)) used.push(i);
     used.sort((a, b) => quickCounts[b] - quickCounts[a]);
     if (recent.length && used.length) { const sep = document.createElement('span'); sep.className = 'quick-sep'; sep.setAttribute('aria-hidden', 'true'); box.appendChild(sep); }
     used.slice(0, 30).forEach((i) => add(i, n(i)));
     $$('button', box).forEach((b, k) => { b.tabIndex = k === 0 ? 0 : -1; });
-    cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded')));
+    if (sheetMode()) cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded')));
   }
   // Choose a color to draw with (palette, quick row, counts): drawing tools come back.
   function pickColor(i) {
     selectColor(i);
     if (S.tool === 'eraser' || S.tool === 'picker' || S.tool === 'pan') setTool('pencil');
   }
-  const phoneMQ = matchMedia('(max-width: 599px)');
+  const phoneMQ = matchMedia('(max-width: 599px)'), foldedMQ = matchMedia('(vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+  // Is the sidebar a bottom sheet right now? (phones, except when folded at the hinge,
+  // where it's always open). Checked separately: browsers that don't know the
+  // segments feature would make a combined "not (...)" query false altogether.
+  const sheetMode = () => phoneMQ.matches && !foldedMQ.matches;
   function setSheet(open) {
     const sb = $('#sidebar'), t = $('#sheetToggle');
     sb.classList.toggle('expanded', open);
+    requestAnimationFrame(updateBelowCanvas);
     t.setAttribute('aria-expanded', String(open));
     t.setAttribute('aria-label', open ? 'Hide colors and panels' : 'Show all colors and panels');
     const cur = $('#quickColors [data-q=current]');
@@ -887,7 +902,7 @@
     else S.focus = { r, c };
     fitView();
     refreshPanels();
-    if (fromPanel && phoneMQ.matches && $('#sidebar').classList.contains('expanded')) {
+    if (fromPanel && sheetMode() && $('#sidebar').classList.contains('expanded')) {
       const hadFocus = $('#trayGrid').contains(document.activeElement);
       setSheet(false); // the canvas then grows and the tray is fitted again
       if (hadFocus) $('#sheetToggle').focus();
@@ -1773,7 +1788,7 @@
     $('#quickColors').addEventListener('click', (e) => {
       const b = e.target.closest('[data-q]');
       if (!b) return;
-      if (b.dataset.q === 'current') setSheet(!$('#sidebar').classList.contains('expanded'));
+      if (b.dataset.q === 'current') { if (sheetMode()) setSheet(!$('#sidebar').classList.contains('expanded')); }
       else pickColor(+b.dataset.q);
     });
     $('#quickColors').addEventListener('keydown', (e) => {
@@ -1796,10 +1811,20 @@
       const focused = bar.contains(document.activeElement) ? document.activeElement : null;
       if (shortMQ.matches) { if (bar.parentElement !== fa) fa.insertBefore(bar, fa.querySelector('.repo-sep')); }
       else if (bar.parentElement !== $('.stage')) { $('.stage').insertBefore(bar, viewport); setMore(false); }
-      if (focused && document.activeElement !== focused && focused.offsetParent) focused.focus();
+      if (focused && document.activeElement !== focused) (focused.offsetParent ? focused : $('#moreBtn')).focus();
     };
     shortMQ.addEventListener('change', placeStageBar);
     placeStageBar();
+    // Rotating into the phone layout hides a collapsed sheet: keep focus on its toggle.
+    // (The browser may already have dropped focus when the element was hidden, so go by
+    // the last element that had it.)
+    let lastFocused = null;
+    document.addEventListener('focusin', (e) => { lastFocused = e.target; });
+    phoneMQ.addEventListener('change', () => {
+      const sb = $('#sidebar'), a = document.activeElement;
+      const f = !a || a === document.body ? lastFocused : a;
+      if (sheetMode() && f && !sb.classList.contains('expanded') && sb.contains(f) && !$('.sheet-bar').contains(f)) $('#sheetToggle').focus();
+    });
     // Crossing into a layout without the ⋯ menu closes it, so it doesn't linger unseen.
     matchMedia('(max-width: 759px), (max-height: 520px)').addEventListener('change', (e) => { if (!e.matches) setMore(false); });
     // The folded-phone layout needs the top bar's height.
@@ -1879,7 +1904,7 @@
         pickColor(c.i);
         // Phones: picking from the full palette closes the sheet so the canvas is back;
         // the color stays in the quick row, which keeps the focus.
-        if (phoneMQ.matches && $('#sidebar').classList.contains('expanded')) {
+        if (sheetMode() && $('#sidebar').classList.contains('expanded')) {
           setSheet(false);
           $('#quickColors [data-q=current]').focus();
         }
@@ -1996,7 +2021,7 @@
       const k = e.key.toLowerCase();
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       if (e.key === 'Escape' && $('#fileActions').classList.contains('open')) { e.preventDefault(); setMore(false, true); return; }
-      if (e.key === 'Escape' && phoneMQ.matches && $('#sidebar').classList.contains('expanded') && !e.target.closest('dialog')) {
+      if (e.key === 'Escape' && sheetMode() && $('#sidebar').classList.contains('expanded') && !e.target.closest('dialog, input:not([type=checkbox]), textarea, select')) {
         e.preventDefault(); setSheet(false); $('#sheetToggle').focus(); return;
       }
       // Ctrl+S saves the project from anywhere, including while typing its name.
