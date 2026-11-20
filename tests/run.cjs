@@ -1909,6 +1909,69 @@ test('wheel: deltaMode is read before the deltas (Firefox switches to pixels oth
   eq(firsts, ['deltaMode', 'deltaMode', 'deltaMode', 'deltaMode'], 'first property read, per event');
 });
 
+// ---------- 1.3: check my colors ----------
+const hexOf = (p, code) => p.evaluate((code) => { const S = __pindou.S; return S.palette[S.codeIndex.get(code)].hex; }, code);
+test('check colors: the disputed codes are the ones the two lists visibly disagree about', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors().map((x) => x.code));
+  eq(d.length, 11, 'how many: ' + d.join(' '));
+  for (const c of ['H13', 'A25', 'F11', 'G8']) assert(d.includes(c), c + ' missing');
+  assert(!(await p.evaluate(() => __pindou.findDisputed(0).some((x) => x.code === 'H1'))), 'the clear bead is never disputed, even with no threshold');
+});
+test('check colors: a choice recolors that code in both palettes, keeps the design, and lasts', async (p) => {
+  await stroke(p, 5);
+  const before = await design(p);
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]); // A25
+  const now = await hexOf(p, d.code), pick = d.hexes.find((h) => h !== now);
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  eq(await p.textContent('#checkStep'), `Bead 1 of 11: ${d.code}`, 'first step');
+  await p.click(`#checkPair [data-hex="${pick}"]`);
+  eq(await hexOf(p, d.code), pick, 'color in this palette');
+  assert(/Bead 2 of 11/.test(await p.textContent('#checkStep')), 'moved on');
+  eq(await design(p), before, 'design');
+  await p.click('#checkDialog button[value=done]');
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await hexOf(p, d.code), pick, 'after a reload');
+  // the other palette uses it too
+  await p.selectOption('#paletteSelect', await p.evaluate(() => [...document.querySelectorAll('#paletteSelect option')].map((o) => o.value).find((v) => v !== __pindou.S.paletteId)));
+  await p.waitForTimeout(200);
+  eq(await hexOf(p, d.code), pick, 'in the other palette');
+});
+test('check colors: Back, Skip, and going back to the published colors', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors());
+  const pub0 = await hexOf(p, d[0].code);
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  const pick = d[0].hexes.find((h) => h !== pub0);
+  await p.click(`#checkPair [data-hex="${pick}"]`);
+  await p.click('#checkBack');
+  eq(await p.getAttribute(`#checkPair [data-hex="${pick}"]`, 'aria-pressed'), 'true', 'Back shows the choice');
+  for (let k = 0; k < 11; k++) await p.click('#checkSkip');
+  assert(!(await p.evaluate(() => document.querySelector('#checkSummary').hidden)), 'no summary at the end');
+  assert((await p.textContent('#checkSummaryText')).includes(d[0].code), 'summary lists the choice');
+  await p.click('#checkReset');
+  eq(await hexOf(p, d[0].code), pub0, 'published color again');
+  eq(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')), '{}', 'stored corrections');
+});
+test('check colors: stored corrections that aren\'t candidate colors are ignored', async (p) => {
+  const [a, b] = await p.evaluate(() => __pindou.disputedColors().slice(0, 2));
+  const pub = { [a.code]: await hexOf(p, a.code), [b.code]: await hexOf(p, b.code) };
+  const lower = a.hexes.find((h) => h !== pub[a.code]).toLowerCase();
+  const reload = async (v) => { await p.evaluate((v) => localStorage.setItem('pindou.colorFixes', v), v); await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady); };
+  // not a disputed code, not a candidate color, another code's candidate: ignored
+  await reload(JSON.stringify({ A1: '#000000', H13: '#123456', H1: '#FFFFFF', [b.code]: a.hexes[0] }));
+  eq([await hexOf(p, a.code), await hexOf(p, b.code)], [pub[a.code], pub[b.code]], 'after odd corrections');
+  // a candidate written in lower case is fine
+  await reload(JSON.stringify({ [a.code]: lower }));
+  eq(await hexOf(p, a.code), lower.toUpperCase(), 'lower-case candidate');
+  for (const v of ['[1,2]', 'null', '"text"', '{"__proto__":{"x":1}}']) { await reload(v); eq(p.errors, [], 'page errors after ' + v); }
+});
+test('check colors: a choice in one tab recolors another open tab', async (p) => {
+  const t = await secondTab(p);
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]);
+  const now = await hexOf(t, d.code), other = d.hexes.find((h) => h !== now);
+  await p.click('#checkColors'); await p.click(`#checkPair [data-hex="${other}"]`);
+  await t.waitForFunction(([c, h]) => __pindou.S.palette[__pindou.S.codeIndex.get(c)].hex === h, [d.code, other], { timeout: 3000 });
+});
+
 test('keyboard: after New makes the design smaller, Enter paints inside it', async (p) => {
   await newDesign(p, { across: 2, down: 1 });
   await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End'); // column 104
@@ -1952,6 +2015,42 @@ test('keyboard: it says when picking or filling does nothing, and when a fill wo
   assert(/^Filled\./.test(await p.textContent('#canvasLive')), 'real fill: ' + await p.textContent('#canvasLive'));
   await keys(p, 'Enter');
   assert(/^Nothing changed\./.test(await p.textContent('#canvasLive')), 'fill with the same color: ' + await p.textContent('#canvasLive'));
+});
+test('check colors: Enter on Skip skips again, instead of picking', async (p) => {
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  await p.focus('#checkSkip'); await p.keyboard.press('Enter'); await p.keyboard.press('Enter');
+  assert(/Bead 3 of 11/.test(await p.textContent('#checkStep')), 'step: ' + await p.textContent('#checkStep'));
+  eq(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')), null, 'stored corrections');
+});
+test('check colors: a correction from another tab re-converts an open image instead of losing it', async (p) => {
+  const t = await secondTab(p); // paused; give editing to it, then open the image dialog there
+  await t.click('#tabTake'); await t.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await t.click('[data-action=import-image]');
+  await t.setInputFiles('#imgFile', await makeImage(t, 120, 60));
+  await t.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  // the paused tab can't open the wizard; write the correction as another tab would
+  await p.evaluate(() => { const d = __pindou.disputedColors()[0]; localStorage.setItem('pindou.colorFixes', JSON.stringify({ [d.code]: d.hexes[1] })); });
+  await t.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'pindou.colorFixes' })));
+  await t.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 10000 });
+  await t.click('#imgApply'); await t.waitForTimeout(200);
+  eq(await t.evaluate(() => [__pindou.S.w, __pindou.S.h]), [52, 26], 'imported size');
+});
+test('check colors: reopening puts focus on the earlier choice, so Enter keeps it', async (p) => {
+  const d = await p.evaluate(() => __pindou.disputedColors()[0]);
+  await p.click('#checkColors'); await p.click(`#checkPair [data-hex="${d.hexes[1]}"]`);
+  await p.click('#checkDialog button[value=done]');
+  await p.click('#checkColors'); await p.waitForFunction(() => document.querySelector('#checkDialog').open);
+  eq(await p.evaluate(() => document.activeElement.dataset.hex), d.hexes[1], 'focused swatch');
+  await p.keyboard.press('Enter');
+  eq(JSON.parse(await p.evaluate(() => localStorage.getItem('pindou.colorFixes')))[d.code], d.hexes[1], 'stored choice');
+});
+test('check colors: the summary updates when another tab changes a correction', async (p) => {
+  await p.click('#checkColors');
+  for (let k = 0; k < 11; k++) await p.click('#checkSkip');
+  assert(/No choices made/.test(await p.textContent('#checkSummaryText')), 'summary');
+  await p.evaluate(() => { const d = __pindou.disputedColors()[0]; localStorage.setItem('pindou.colorFixes', JSON.stringify({ [d.code]: d.hexes[1] })); window.dispatchEvent(new StorageEvent('storage', { key: 'pindou.colorFixes' })); });
+  assert(/Your choices/.test(await p.textContent('#checkSummaryText')), 'summary after another tab: ' + await p.textContent('#checkSummaryText'));
+  eq(await p.isVisible('#checkReset'), true, 'reset offered');
 });
 // ---------- runner ----------
 (async () => {

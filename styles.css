@@ -216,6 +216,12 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dlg label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .dlg label.check { flex-direction: row; }
 .dlg-group { display: flex; flex-direction: column; gap: 10px; }
+.check-pair { display: flex; gap: 12px; }
+.check-swatch { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; }
+.check-swatch[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-2); font-weight: 600; }
+.check-swatch:focus-visible { outline: 3px dashed var(--accent); outline-offset: 3px; }
+.check-chip { display: block; width: 100%; aspect-ratio: 1; max-height: 34vh; border-radius: 8px; border: 1px solid var(--line); }
+#checkStepBox[hidden], #checkSummary[hidden] { display: none; }
 .link-which { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .link-which legend { font-size: 13px; padding: 0; margin-bottom: 4px; }
 #linkSimpleCtl[hidden], #linkSimpler[hidden] { display: none; }

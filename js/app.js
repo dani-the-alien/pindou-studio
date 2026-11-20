@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.3'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.4'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -81,14 +81,72 @@
   };
 
   // ---------- palette ----------
+  // ---------- "check my colors": per-code corrections ----------
+  // The two published MARD color lists visibly disagree (CIEDE2000 > 3) about a few codes;
+  // some look like typos (H13 is #F4EDF1 in one and #F4EFD1 in the other). The person holds
+  // each real bead against both candidates and picks the closer one. The choice is kept per
+  // code and used wherever that code appears, in every palette. It changes what color a
+  // code shows as, never which code a bead is, so designs stay as they are.
+  const FIX_KEY = 'pindou.colorFixes', DISPUTE_DE = 3;
+  let disputed = null, colorFixes = null;
+  function disputedColors() {
+    if (!disputed) disputed = findDisputed(DISPUTE_DE);
+    return disputed;
+  }
+  function findDisputed(minDE) {
+    const lists = Object.values(PALETTES).map((p) => new Map(p.colors.map((c) => [c.code, c])));
+    const lab = (hex) => Color.rgbToLab(...Color.hexToRgb(hex));
+    const found = [];
+    for (const [code, c] of lists[0]) {
+      if (c.transparent || lists.some((l) => !l.has(code))) continue;
+      const hexes = [...new Set(lists.map((l) => l.get(code).hex.toUpperCase()))];
+      if (hexes.length < 2) continue;
+      let most = 0;
+      for (let a = 0; a < hexes.length; a++) for (let b = a + 1; b < hexes.length; b++) most = Math.max(most, Color.deltaE2000(lab(hexes[a]), lab(hexes[b])));
+      if (most > minDE) found.push({ code, hexes });
+    }
+    return found;
+  }
+  // Only a disputed code set to one of its candidate colors is accepted from storage.
+  function loadColorFixes() {
+    const raw = store.get(FIX_KEY, {}), out = {};
+    if (raw && typeof raw === 'object') {
+      for (const d of disputedColors()) {
+        const v = raw[d.code];
+        if (typeof v === 'string' && d.hexes.includes(v.toUpperCase())) out[d.code] = v.toUpperCase();
+      }
+    }
+    return out;
+  }
+  function fixFor(code) {
+    if (!colorFixes) colorFixes = loadColorFixes();
+    return Object.prototype.hasOwnProperty.call(colorFixes, code) ? colorFixes[code] : null;
+  }
+  // Rebuild the palette's colors in place: same codes in the same order, so cells stay valid.
+  function recolorPalette() {
+    S.palette = buildPalette(S.paletteId);
+    // matches made with the old colors must not be applied: convert again if the image
+    // dialog is open (its preview and "Use pattern" then follow the new colors)
+    imgState.caches = new Map(); imgState.result = null;
+    if ($('#imageDialog').open && imgState.img) { $('#imgApply').disabled = true; startConvert(); } else cancelConvert();
+    rebuildPixmap(); refreshPanels(); requestDraw();
+  }
+  function setColorFix(code, hex) {
+    if (!colorFixes) colorFixes = loadColorFixes();
+    if (hex) colorFixes[code] = hex; else delete colorFixes[code];
+    store.set(FIX_KEY, colorFixes);
+    recolorPalette();
+  }
+
   function buildPalette(id) {
     return PALETTES[id].colors.map((c, i) => {
-      const rgb = Color.hexToRgb(c.hex);
+      const hex = (!c.transparent && fixFor(c.code)) || c.hex;
+      const rgb = Color.hexToRgb(hex);
       const col = {
-        i, code: c.code, hex: c.hex, rgb,
+        i, code: c.code, hex, rgb,
         lab: Color.rgbToLab(rgb[0], rgb[1], rgb[2]),
         ok: Color.rgbToOklch(rgb[0], rgb[1], rgb[2]),
-        text: c.transparent ? '#333' : Color.contrastText(c.hex),
+        text: c.transparent ? '#333' : Color.contrastText(hex),
         transparent: !!c.transparent,
         series: c.code.match(/^[A-Z]+/)[0],
       };
@@ -708,6 +766,51 @@
     const v = S.cells[cell.i];
     const bead = v >= 0 ? `${S.palette[v].code} ${S.palette[v].hex}${S.palette[v].transparent ? ' (clear)' : ''}` : 'empty';
     st.textContent = `x ${cell.x + 1}, y ${cell.y + 1} · ${trayName(r, c)} peg ${(cell.x % S.tray) + 1}, ${(cell.y % S.tray) + 1} · ${bead}`;
+  }
+
+  // ---------- the "check my colors" wizard ----------
+  const check = { list: [], k: 0 };
+  function openCheckColors() {
+    check.list = disputedColors(); check.k = 0;
+    showDialog($('#checkDialog')); // first: focus can't move into a closed dialog
+    showCheckStep(true);
+  }
+  // focusSwatch: after opening or picking. After Skip or Back, focus stays on that button,
+  // so pressing Enter again skips again rather than picking a color.
+  function showCheckStep(focusSwatch) {
+    const n = check.list.length, done = check.k >= n;
+    $('#checkStepBox').hidden = done; $('#checkSummary').hidden = !done;
+    $('#checkBack').disabled = check.k === 0;
+    $('#checkSkip').hidden = done;
+    if (done) {
+      const fixed = check.list.filter((d) => fixFor(d.code));
+      $('#checkSummaryText').textContent = fixed.length
+        ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, in both palettes, on this device.`
+        : 'No choices made: the colors are as published.';
+      $('#checkReset').hidden = !fixed.length;
+      // move focus only from the step that just ended (not when another tab's change re-renders it)
+      if (focusSwatch || $('#checkStepBox').contains(document.activeElement) || document.activeElement === document.body || $('#checkSkip') === document.activeElement) $('#checkSummary').focus();
+      return;
+    }
+    const d = check.list[check.k], mine = fixFor(d.code);
+    $('#checkStep').textContent = `Bead ${check.k + 1} of ${n}: ${d.code}`;
+    const box = $('#checkPair');
+    box.replaceChildren(...d.hexes.map((hex, k) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'check-swatch'; b.dataset.hex = hex;
+      b.setAttribute('aria-pressed', String(mine === hex));
+      b.setAttribute('aria-label', `Swatch ${'AB'[k] || k + 1} (${hex})${mine === hex ? ', your choice' : ''}`);
+      const sw = document.createElement('span'); sw.className = 'check-chip'; sw.style.background = hex;
+      const t = document.createElement('span'); t.textContent = `${'AB'[k] || k + 1}${mine === hex ? ' · your choice ✓' : ''}`;
+      b.append(sw, t);
+      return b;
+    }));
+    if (focusSwatch || document.activeElement === document.body || document.activeElement.disabled) (box.querySelector('[aria-pressed="true"]') || box.querySelector('button')).focus();
+  }
+  function checkPick(hex) {
+    setColorFix(check.list[check.k].code, hex);
+    check.k++;
+    showCheckStep(true);
   }
 
   // ---------- drawing from the keyboard ----------
@@ -2691,6 +2794,22 @@
     }));
 
     // open file
+    // check my colors
+    $('#checkColors').addEventListener('click', openCheckColors);
+    $('#checkPair').addEventListener('click', (e) => { const b = e.target.closest('[data-hex]'); if (b) checkPick(b.dataset.hex); });
+    $('#checkSkip').addEventListener('click', () => { check.k++; showCheckStep(); });
+    $('#checkBack').addEventListener('click', () => { check.k = Math.max(0, check.k - 1); showCheckStep(); });
+    $('#checkReset').addEventListener('click', () => {
+      colorFixes = {}; store.set(FIX_KEY, colorFixes); recolorPalette();
+      showCheckStep(); toast('Colors are as published again.');
+    });
+    // another tab changed the corrections
+    window.addEventListener('storage', (e) => {
+      if (e.key !== FIX_KEY) return;
+      colorFixes = loadColorFixes(); recolorPalette();
+      if ($('#checkDialog').open) showCheckStep(); // the step's "your choice", or the summary, may have changed
+    });
+
     $('#linkCopy').addEventListener('click', copyLink);
     $('#linkQrBtn').addEventListener('click', toggleLinkQr);
     $$('input[name=linkWhich]').forEach((r) => r.addEventListener('change', showLinkChoice));
@@ -2927,6 +3046,6 @@
   let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, simplifyCells, removeStrays, mergeOrder, reduceColors, simplerTries, get tabReady() { return tabReady; } };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, simplifyCells, removeStrays, mergeOrder, reduceColors, simplerTries, disputedColors, findDisputed, get tabReady() { return tabReady; } };
   boot();
 })();
