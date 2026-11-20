@@ -1840,6 +1840,25 @@ test('keyboard: stepping to another tray brings the cursor into it', async (p) =
   const tray = await p.evaluate(() => __pindou.S.tray);
   eq(await cellV(p, tray, 1), await p.evaluate(() => __pindou.S.color), 'bead at the left edge of the second tray');
 });
+test('keyboard: Ctrl+Z of a resize while the canvas has focus keeps the cursor inside', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End'); // column 104
+  await keys(p, 'Control+z'); // back to 52 wide, the canvas still focused
+  eq(await p.evaluate(() => __pindou.S.w), 52, 'width after undo');
+  await keys(p, 'Enter');
+  eq(await cellV(p, 51, 0), await p.evaluate(() => __pindou.S.color), 'bead at the right edge');
+  eq(await beads(p), 1, 'beads');
+});
+test('keyboard: it says when picking or filling does nothing, and when a fill works with a full undo history', async (p) => {
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'i', 'Enter');
+  assert(/Nothing to pick here/.test(await p.textContent('#canvasLive')), 'empty pick: ' + await p.textContent('#canvasLive'));
+  await keys(p, 'p');
+  for (let k = 0; k < 205; k++) await keys(p, k % 2 ? 'Delete' : 'Enter'); // fill the undo history
+  await keys(p, 'Delete', 'f', 'Enter');
+  assert(/^Filled\./.test(await p.textContent('#canvasLive')), 'real fill: ' + await p.textContent('#canvasLive'));
+  await keys(p, 'Enter');
+  assert(/^Nothing changed\./.test(await p.textContent('#canvasLive')), 'fill with the same color: ' + await p.textContent('#canvasLive'));
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

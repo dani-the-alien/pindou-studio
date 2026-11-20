@@ -725,9 +725,9 @@
       return;
     }
     if (!erase && (S.tool === 'fill' || S.tool === 'replace')) {
-      const steps = S.undo.length;
+      const top = S.undo[S.undo.length - 1]; // (the length stays at the cap once the history is full)
       runTapTool({ tool: S.tool, cell });
-      announceCursor(S.undo.length === steps ? 'Nothing changed.' : S.tool === 'fill' ? 'Filled.' : 'Swapped.');
+      announceCursor(S.undo[S.undo.length - 1] === top ? 'Nothing changed.' : S.tool === 'fill' ? 'Filled.' : 'Swapped.');
       return;
     }
     const v = erase || S.tool === 'eraser' ? -1 : S.color;
