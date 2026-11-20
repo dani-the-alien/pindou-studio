@@ -856,9 +856,116 @@
   }
   function flushAutosave() {
     clearTimeout(saveTimer);
-    if (!dirty) return;
+    if (!dirty || !tab.editing) return;
     store.set('pindou.autosave', serialize());
     dirty = false;
+  }
+
+  // ---------- one editing tab at a time ----------
+  // All tabs share one autosave, so only the tab holding the "editor" lock may
+  // change the design. Another tab shows a blocking notice; "Edit here instead"
+  // steals the lock, and the tab that loses it saves, tells the new one it's done
+  // (so the new one loads the latest work, not an older autosave), and waits. A
+  // waiting tab also takes over by itself when the editing tab closes.
+  // Without Web Locks (very old browsers) every tab edits, as before.
+  const tab = { editing: true, blocked: false, waiting: null, chan: null, released: null };
+  const LOCK = 'pindou.editor';
+  // onAnswer(true|false) runs as soon as the browser grants or (ifAvailable) refuses.
+  function lockRequest(opts, onAnswer) {
+    let granted = false;
+    navigator.locks.request(LOCK, opts, (lock) => {
+      if (onAnswer) onAnswer(!!lock);
+      if (!lock) return null;
+      granted = true;
+      onLockGained(!!opts.steal);
+      return new Promise(() => {}); // held until this tab closes or the lock is stolen
+    }).catch(() => { if (granted) onLockLost(); }); // stolen, or our own wait was cancelled
+  }
+  function waitForLock() {
+    if (tab.waiting) return;
+    tab.waiting = new AbortController();
+    lockRequest({ signal: tab.waiting.signal });
+  }
+  function onLockGained(stole) {
+    if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; }
+    tab.editing = true;
+    if (tab.starting) { takeLatest(true); return; } // freed up just after start
+    if (!tab.blocked) return; // first start: nothing to take over
+    // Give the tab we took over from a moment to save, then load the latest work.
+    const done = () => { tab.released = null; takeLatest(); hideTabNotice(); };
+    if (!stole || !tab.chan) { done(); return; }
+    const t = setTimeout(done, 1000);
+    tab.released = () => { clearTimeout(t); done(); };
+  }
+  function onLockLost() {
+    if (!tab.editing) return;
+    if (S.stroke) cancelStroke();
+    $$('dialog[open]').forEach((d) => { if (d.id !== 'tabDialog') d.close('cancel'); });
+    if (!$('#exportMenu').hidden) closeMenu(false);
+    dirty = true; flushAutosave(); // always hand over the latest, even if unchanged
+    tab.editing = false;
+    if (tab.chan) tab.chan.postMessage({ type: 'released' });
+    showTabNotice('You started editing in another tab, so this one is paused. Your work here was saved and carried over.');
+    waitForLock();
+  }
+  // Load the autosave if another tab changed it. One undo step, so Undo goes back
+  // to what this tab had before.
+  function takeLatest(quiet) {
+    const saved = store.get('pindou.autosave', null);
+    let msg = 'Editing in this tab now.';
+    if (saved) {
+      try {
+        const { state, name } = parseProject(saved);
+        const next = { ...state, name };
+        const cur = snapshot();
+        const same = next.paletteId === cur.paletteId && next.tray === cur.tray && next.name === cur.name &&
+          next.w === cur.w && next.h === cur.h && next.cells.every((v, i) => v === cur.cells[i]);
+        if (!same) {
+          S.focus = null;
+          if (quiet) { S.focus = null; applyState(next); S.name = name; changed(); refreshPanels(); } else replaceState(next);
+          msg = "Editing in this tab now, with the other tab's latest work. Undo goes back to what this tab had.";
+        }
+      } catch { /* unreadable autosave: keep what this tab has */ }
+    }
+    if (!quiet) toast(msg);
+  }
+  function showTabNotice(text) {
+    $('#tabText').textContent = text;
+    const d = $('#tabDialog');
+    tab.blocked = true;
+    if (!d.open) showDialog(d);
+    $('#tabTake').focus();
+  }
+  function hideTabNotice() { tab.blocked = false; const d = $('#tabDialog'); if (d.open) d.close(); }
+  function initTabLock() {
+    if (!(navigator.locks && navigator.locks.request)) return Promise.resolve();
+    tab.editing = false;
+    if ('BroadcastChannel' in window) {
+      tab.chan = new BroadcastChannel('pindou');
+      tab.chan.onmessage = (e) => { if (e.data && e.data.type === 'released' && tab.released) tab.released(); };
+    }
+    $('#tabDialog').addEventListener('cancel', (e) => e.preventDefault()); // Escape doesn't dismiss it
+    $('#tabTake').addEventListener('click', () => {
+      if (tab.waiting) { tab.waiting.abort(); tab.waiting = null; }
+      lockRequest({ steal: true });
+    });
+    return new Promise((ready) => {
+      lockRequest({ ifAvailable: true }, (got) => {
+        if (!got) {
+          // On a reload the old page may not have let go yet: wait a moment before
+          // showing the notice, and take over quietly if the lock frees up meanwhile.
+          tab.starting = true;
+          waitForLock();
+          setTimeout(() => {
+            tab.starting = false;
+            if (!tab.editing) showTabNotice('Pindou Studio is already open in another tab or window.');
+            ready();
+          }, 500);
+          return;
+        }
+        ready();
+      });
+    });
   }
 
   // ---------- rendering for export / print ----------
@@ -1249,22 +1356,55 @@
     clearTimeout(imgState.timer); imgState.timer = null;
     clearTimeout(imgState.stepTimer); imgState.stepTimer = null;
     imgState.job = null;
+    hideBusy();
+  }
+  // Progress card over the preview. Only appears once a conversion has run for a
+  // moment, so quick conversions don't flash it. The time estimate comes from this
+  // pass's own rate, and waits until there's enough of it to be meaningful.
+  const BUSY_DELAY = 400;
+  function showBusy(pass, progress, passMs) {
+    const pct = Math.min(99, Math.floor(progress * 100));
+    $('#imgPreviewBox').classList.add('busy');
+    $('#imgPreviewBox').setAttribute('aria-busy', 'true');
+    $('#imgBusy').hidden = false;
+    $('#imgBusyLabel').textContent = pass > 1 ? 'Reducing colors…' : 'Converting…';
+    $('#imgBusyPct').textContent = pct + '%';
+    $('#imgProgress').value = pct;
+    let eta = '';
+    if (passMs > 1500 && progress > 0.03) {
+      const left = (passMs * (1 - progress)) / progress / 1000;
+      eta = left < 5 ? 'Almost done' : left < 60 ? `About ${Math.ceil(left / 5) * 5} s left` : `About ${Math.round(left / 60)} min left`;
+      if (pass > 1) eta += ' in this step';
+    } else if (passMs > 1500) eta = 'Working out how long this will take…';
+    if (imgState.applyWhenDone) eta += (eta ? ' · ' : '') + 'the pattern will be used when this finishes';
+    $('#imgBusyEta').textContent = eta;
+  }
+  function hideBusy() {
+    $('#imgPreviewBox').classList.remove('busy');
+    $('#imgPreviewBox').removeAttribute('aria-busy');
+    $('#imgBusy').hidden = true;
   }
   // Is a newer conversion still waiting or running? Then the shown result is stale.
   const convertPending = () => !!(imgState.timer || imgState.job);
   // Convert in ~20 ms slices so the page stays responsive; a newer request cancels this one.
   function startConvert() {
+    const wasBusy = !$('#imgBusy').hidden; // a newer setting replaced a long run: keep the card up
     cancelConvert();
     if (!imgState.img) return;
     const job = convertJob(convertOpts());
     imgState.job = job;
+    const started = performance.now();
+    let curPass = 1, passStart = started;
     const step = () => {
       if (imgState.job !== job) return;
       jobDeadline = performance.now() + 20;
       let r;
       try { r = job.next(); } finally { jobDeadline = Infinity; }
-      if (r.done) { imgState.job = null; showConversion(r.value); return; }
+      if (r.done) { imgState.job = null; hideBusy(); showConversion(r.value); return; }
       const { pass, progress } = r.value;
+      const now = performance.now();
+      if (pass !== curPass) { curPass = pass; passStart = now; }
+      if (wasBusy || now - started > BUSY_DELAY) showBusy(pass, progress, now - passStart);
       $('#imgStats').textContent = `Converting… ${Math.round(progress * 100)}%${pass > 1 ? ' (reducing colors)' : ''}${imgState.applyWhenDone ? ' · will use the pattern when done' : ''}`;
       imgState.stepTimer = setTimeout(step, 0);
     };
@@ -1550,6 +1690,7 @@
       if (e.key === 'Escape' && !$('#exportMenu').hidden) { e.preventDefault(); closeMenu(true); return; }
       // Ctrl+S saves the project from anywhere, including while typing its name.
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveProject(); return; }
+      if (!tab.editing) return; // another tab is editing (or this one is still starting)
       if (e.target.closest('dialog')) return;
       // Text fields keep their own undo; dropdowns and checkboxes don't have one.
       const typing = e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]), textarea, [contenteditable]');
@@ -1638,9 +1779,11 @@
     booted = true;
     $('#status').textContent = `Pindou Studio v${VERSION}`;
     checkVersion();
+    tabReady = initTabLock();
   }
+  let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, get tabReady() { return tabReady; } };
   boot();
 })();

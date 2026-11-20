@@ -145,6 +145,18 @@
     </aside>
   </main>
 
+  <!-- Another tab is editing: this one waits -->
+  <dialog id="tabDialog" aria-labelledby="tabTitle" aria-describedby="tabText">
+    <div class="dlg">
+      <h2 id="tabTitle">Open in another tab</h2>
+      <p id="tabText"></p>
+      <p class="hint">Only one tab edits at a time, so two tabs can't overwrite each other's work. If you close the other tab, this one carries on by itself.</p>
+      <div class="dlg-actions">
+        <button type="button" class="primary" id="tabTake">Edit here instead</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- New project -->
   <dialog id="newDialog">
     <form method="dialog" class="dlg">
@@ -197,8 +209,13 @@
           <label class="check"><input type="checkbox" id="imgClear" checked> Transparent pixels → empty</label>
           <p class="hint" id="imgStats"></p>
         </div>
-        <div class="import-preview">
+        <div class="import-preview" id="imgPreviewBox">
           <canvas id="imgPreview" width="320" height="320"></canvas>
+          <div id="imgBusy" class="img-busy" hidden>
+            <div class="img-busy-head"><span id="imgBusyLabel">Converting…</span><span id="imgBusyPct"></span></div>
+            <progress id="imgProgress" max="100" value="0" aria-labelledby="imgBusyLabel"></progress>
+            <div id="imgBusyEta" class="img-busy-eta"></div>
+          </div>
         </div>
       </div>
       <div class="dlg-actions">

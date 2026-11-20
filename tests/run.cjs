@@ -44,6 +44,7 @@ async function open(browser, base, opts = {}) {
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.waitForFunction(() => window.__pindou);
+  await page.evaluate(() => __pindou.tabReady);
   page.errors = errors;
   page.ctx = ctx;
   return page;
@@ -312,14 +313,84 @@ test('sliced image conversion matches a straight-through one and keeps the page 
 });
 
 // ---------- regressions from the 1.0 release review ----------
-test('closing an untouched second tab does not overwrite the other tab\'s autosave', async (p) => {
-  const second = await p.ctx.newPage();
-  await second.goto(p.url()); await second.waitForFunction(() => window.__pindou);
-  await second.click('[data-tool=fill]'); await second.mouse.click(...await cellPoint(second, 5, 5));
-  await second.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-  await p.evaluate(() => { window.dispatchEvent(new Event('pagehide')); }); // the untouched tab closes
+// ---------- 1.1 ----------
+async function secondTab(p) {
+  const t = await p.ctx.newPage();
+  t.errors = []; t.on('pageerror', (e) => t.errors.push(e.message));
+  await t.goto(p.url()); await t.waitForFunction(() => window.__pindou);
+  await t.evaluate(() => __pindou.tabReady);
+  return t;
+}
+const tabState = (t) => t.evaluate(() => ({ editing: __pindou.tab.editing, notice: document.querySelector('#tabDialog').open }));
+test('a second tab is blocked while the first one edits', async (p) => {
+  const t2 = await secondTab(p);
+  eq(await tabState(p), { editing: true, notice: false }, 'first tab');
+  eq(await tabState(t2), { editing: false, notice: true }, 'second tab');
+  await t2.keyboard.press('Escape');
+  eq(await tabState(t2), { editing: false, notice: true }, 'Escape does not dismiss the notice');
+  await t2.keyboard.press('Control+z');
+  // a blocked tab never writes the autosave, even when it closes
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
+  await p.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await t2.evaluate(() => window.dispatchEvent(new Event('pagehide')));
   const n = await p.evaluate(() => JSON.parse(localStorage.getItem('pindou.autosave')).cells.filter((v) => v >= 0).length);
   eq(n, 52 * 52, 'beads in autosave');
+});
+test('"Edit here instead" moves editing to the second tab with the latest work', async (p) => {
+  const t2 = await secondTab(p);
+  // draw in the first tab and take over straight away, before its autosave timer fires
+  await p.mouse.move(...await cellPoint(p, 2, 2)); await p.mouse.down();
+  await p.mouse.move(...await cellPoint(p, 20, 2), { steps: 5 }); await p.mouse.up();
+  await t2.click('#tabTake');
+  await t2.waitForFunction(() => !document.querySelector('#tabDialog').open);
+  eq(await beads(t2), 19, 'second tab has the first tab\'s stroke');
+  eq(await tabState(t2), { editing: true, notice: false }, 'second tab after taking over');
+  eq(await tabState(p), { editing: false, notice: true }, 'first tab after losing it');
+  // Undo in the new tab goes back to what it had before taking over
+  await t2.keyboard.press('Control+z'); eq(await beads(t2), 0, 'undo in second tab');
+  await t2.keyboard.press('Control+Shift+z'); eq(await beads(t2), 19, 'redo in second tab');
+  // and back again
+  await t2.click('[data-tool=fill]'); await t2.mouse.click(...await cellPoint(t2, 30, 30));
+  await p.click('#tabTake');
+  await p.waitForFunction(() => !document.querySelector('#tabDialog').open);
+  eq(await beads(p), 52 * 52, 'first tab has the second tab\'s fill');
+  eq(await tabState(t2), { editing: false, notice: true }, 'second tab paused again');
+  eq([...p.errors, ...t2.errors], [], 'page errors');
+});
+test('closing the editing tab lets the waiting tab carry on by itself', async (p) => {
+  const t2 = await secondTab(p);
+  await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 5, 5));
+  await p.close({ runBeforeUnload: true });
+  await t2.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open, null, { timeout: 5000 });
+  eq(await beads(t2), 52 * 52, 'waiting tab picked up the closed tab\'s work');
+});
+test('losing the tab closes an open dialog without applying it', async (p) => {
+  const t2 = await secondTab(p);
+  await p.click('[data-action=import-image]');
+  await p.setInputFiles('#imgFile', await makeImage(p, 60, 60));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  await t2.click('#tabTake');
+  await p.waitForFunction(() => document.querySelector('#tabDialog').open);
+  eq(await p.evaluate(() => [document.querySelector('#imageDialog').open, __pindou.S.w]), [false, 52], 'image dialog closed, design unchanged');
+});
+test('a long conversion shows a progress card; a quick one does not', async (p) => {
+  await p.click('[data-action=import-image]');
+  const quick = await p.evaluate(() => { window.__sawBusy = false; new MutationObserver(() => { if (!document.querySelector('#imgBusy').hidden) window.__sawBusy = true; }).observe(document.querySelector('#imgBusy'), { attributes: true }); });
+  await p.setInputFiles('#imgFile', await makeImage(p, 60, 60));
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled);
+  eq(await p.evaluate(() => window.__sawBusy), false, 'card flashed on a quick conversion');
+  // truly random noise: every bead a new color, so nothing comes from the match cache
+  const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 400; const g = c.getContext('2d'); const d = g.createImageData(400, 400); for (let i = 0; i < d.data.length; i++) d.data[i] = i % 4 === 3 ? 255 : (Math.random() * 256) | 0; g.putImageData(d, 0, 0); return c.toDataURL(); });
+  await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
+  await p.fill('#imgW', '400'); await p.dispatchEvent('#imgW', 'input');
+  await p.waitForFunction(() => !document.querySelector('#imgBusy').hidden, null, { timeout: 10000 });
+  await p.waitForFunction(() => /left|Almost done/.test(document.querySelector('#imgBusyEta').textContent), null, { timeout: 15000 });
+  const v1 = await p.evaluate(() => document.querySelector('#imgProgress').value);
+  await p.waitForTimeout(800);
+  const v2 = await p.evaluate(() => document.querySelector('#imgProgress').value);
+  assert(v2 > v1, `progress did not move (${v1} → ${v2})`);
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled && !document.querySelector('#imgStats').textContent.startsWith('Converting'), null, { timeout: 90000 });
+  eq(await p.evaluate(() => [document.querySelector('#imgBusy').hidden, document.querySelector('#imgPreviewBox').hasAttribute('aria-busy')]), [true, false], 'card gone when done');
 });
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
@@ -339,9 +410,12 @@ test('Use pattern during a conversion keeps the page responsive and applies the 
   await p.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 60000 });
   const r = await p.evaluate(async () => {
     let last = performance.now(), worst = 0; const hb = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+    // Wait for the close event, not just !open: the pattern is applied in the close
+    // handler, which runs a task after the dialog stops being open.
+    const closed = new Promise((ok) => document.querySelector('#imageDialog').addEventListener('close', () => setTimeout(ok, 0), { once: true }));
     const el = document.querySelector('#imgW'); el.value = '260'; el.dispatchEvent(new Event('input'));
     document.querySelector('#imgApply').click();
-    await new Promise((ok) => { const chk = () => (!document.querySelector('#imageDialog').open ? ok() : setTimeout(chk, 10)); chk(); });
+    await closed;
     clearInterval(hb);
     return { worst: Math.round(worst), w: __pindou.S.w };
   });
