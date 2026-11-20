@@ -258,7 +258,7 @@
   // Messages on phones sit just above the controls at the bottom of the screen.
   let belowCanvas = -1;
   function updateBelowCanvas() {
-    const bar = $('.sheet-bar'), tb = $('.toolbar');
+    const bar = $('.workspace').classList.contains('sheet-open') ? null : $('.sheet-bar'), tb = $('.toolbar');
     const tops = [bar, tb].map((el) => el && el.getBoundingClientRect()).filter((r) => r && r.height).map((r) => r.top);
     const v = tops.length ? Math.max(0, Math.round(innerHeight - Math.min(...tops))) : 0;
     if (v !== belowCanvas) { belowCanvas = v; document.documentElement.style.setProperty('--below-canvas', v + 'px'); }
@@ -729,7 +729,7 @@
     if (recent.length && used.length) { const sep = document.createElement('span'); sep.className = 'quick-sep'; sep.setAttribute('aria-hidden', 'true'); box.appendChild(sep); }
     used.slice(0, 30).forEach((i) => add(i, n(i)));
     $$('button', box).forEach((b, k) => { b.tabIndex = k === 0 ? 0 : -1; });
-    if (sheetMode()) cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded')));
+    if (sheetMode()) { cb.setAttribute('aria-expanded', String($('#sidebar').classList.contains('expanded'))); cb.setAttribute('aria-controls', 'sidebar'); }
   }
   // Choose a color to draw with (palette, quick row, counts): drawing tools come back.
   function pickColor(i) {
@@ -1786,31 +1786,50 @@
     };
     shortMQ.addEventListener('change', placeStageBar);
     placeStageBar();
-    // Rotating into the phone layout hides a collapsed sheet: keep focus on its toggle.
-    // (The browser may already have dropped focus when the element was hidden, so go by
-    // the last element that had it.)
+    // Compact layouts put the swatches right under the palette/search row, so colors
+    // come first and the screen order matches the Tab order (the elements move, as
+    // with the stage bar; desktop keeps its order).
+    const swatchesFirstMQ = matchMedia('(max-width: 599px), (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2)');
+    const placeSwatches = () => {
+      const sw = $('#swatches'), hint = $('#ownedHint'), panel = $('[data-panel=palette]');
+      const focused = sw.contains(document.activeElement) ? document.activeElement : null;
+      if (swatchesFirstMQ.matches) {
+        const after = panel.querySelector('.row'); // palette + search
+        if (after.nextElementSibling !== hint) { after.after(hint, sw); }
+      } else if ($('#swatchesHome').previousElementSibling !== sw) {
+        $('#swatchesHome').before(hint, sw);
+      }
+      sw.classList.toggle('near-top', swatchesFirstMQ.matches);
+      if (focused && document.activeElement !== focused) focused.focus();
+    };
+    placeSwatches();
+    // Focus that a layout change hid (rotating, folding, resizing) moves to the
+    // control that does the same job in the new layout. The browser may already have
+    // dropped focus when the element was hidden, so go by the element that had it,
+    // unless the user had deliberately moved focus away (blurred a visible element).
     let lastFocused = null;
     document.addEventListener('focusin', (e) => { lastFocused = e.target; });
-    phoneMQ.addEventListener('change', () => {
-      const sb = $('#sidebar'), a = document.activeElement;
-      const f = !a || a === document.body ? lastFocused : a;
-      if (sheetMode() && f && !sb.classList.contains('expanded') && sb.contains(f) && !$('.sheet-bar').contains(f)) $('#sheetToggle').focus();
-      else requestAnimationFrame(keepFocusVisible);
-    });
-    // After a layout change, if the focused control is no longer shown, focus the one
-    // that does the same job in the new layout.
+    document.addEventListener('focusout', (e) => { if (!e.relatedTarget && e.target.getClientRects().length && document.hasFocus()) lastFocused = null; });
     function keepFocusVisible() {
       const a = document.activeElement;
-      const f = !a || a === document.body ? lastFocused : a;
+      const f = a && a !== document.body ? a : lastFocused;
       if (!f || !document.contains(f) || f.getClientRects().length) return;
       let to = null;
-      if (f.closest('#quickColors')) to = $('#swatches .sw[aria-pressed="true"]') || $('#swatches .sw');
-      else if (f === $('#sheetToggle')) to = $('.tabs [aria-selected="true"]');
-      else if (f === $('#moreBtn') || f.closest('#fileActions')) to = $('[data-action=save]');
+      const sb = $('#sidebar');
+      if (sheetMode() && !sb.classList.contains('expanded') && sb.contains(f) && !$('.sheet-bar').contains(f)) to = $('#sheetToggle');
+      else if (f.closest('#quickColors')) to = $('#quickColors [data-q=current]').getClientRects().length ? $('#quickColors [data-q=current]') : ($('#swatches .sw[aria-pressed="true"]') || $('#swatches .sw'));
+      else if (f === $('#sheetToggle')) to = $('#quickColors [data-q=current]').getClientRects().length ? $('#quickColors [data-q=current]') : $('.tabs [aria-selected="true"]');
+      else if (f === $('#moreBtn') || f.closest('#fileActions')) to = $('[data-action=save]').getClientRects().length ? $('[data-action=save]') : $('#moreBtn');
+      else if (f.matches('[data-action=zoom-in], [data-action=zoom-out]')) to = $('[data-action=zoom-fit]');
       if (to && to.getClientRects().length) to.focus();
     }
-    // Crossing into a layout without the ⋯ menu closes it, so it doesn't linger unseen.
-    matchMedia('(max-width: 799px), (max-height: 520px)').addEventListener('change', (e) => { if (!e.matches) setMore(false); requestAnimationFrame(keepFocusVisible); });
+    const compactMQ = matchMedia('(max-width: 799px), (max-height: 520px)');
+    const onLayoutChange = () => {
+      if (!compactMQ.matches) setMore(false); // a layout without ⋯ closes it, so it doesn't linger unseen
+      placeSwatches();
+      requestAnimationFrame(keepFocusVisible);
+    };
+    [phoneMQ, foldedMQ, shortMQ, compactMQ, swatchesFirstMQ, matchMedia('(max-width: 379px)')].forEach((mq) => mq.addEventListener('change', onLayoutChange));
     // The folded-phone layout needs the top bar's height.
     new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', $('.topbar').offsetHeight + 'px')).observe($('.topbar'));
 

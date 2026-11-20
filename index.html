@@ -100,7 +100,7 @@
            collapsed, so colors can be changed without opening it. -->
       <div class="sheet-bar">
         <div id="quickColors" class="quick" role="group" aria-label="Quick colors: current, in this design, and recently used"></div>
-        <button id="sheetToggle" class="sheet-toggle" aria-expanded="false" aria-label="Show all colors and panels" title="All colors and panels">▴</button>
+        <button id="sheetToggle" class="sheet-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Show all colors and panels" title="All colors and panels">▴</button>
       </div>
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="palette" aria-selected="true">Palette</button>
@@ -133,6 +133,7 @@
         </div>
         <p id="ownedHint" class="hint" hidden>Tap colors to mark which ones you actually own. Image conversion can be limited to your collection.</p>
         <div id="swatches" class="swatches"></div>
+        <span id="swatchesHome" hidden></span>
         <p class="hint">Hex values are community approximations of MARD beads (screens and photos vary). Check against a physical color card for close calls.</p>
       </div>
 

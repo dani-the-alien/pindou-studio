@@ -265,7 +265,6 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 body { height: 100vh; height: 100dvh; }
 .topbar { padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
 .file-actions { display: contents; }
-.repo-sep, .repo-link { order: 1; }
 .more-btn, .menu-version, .sheet-bar { display: none; }
 .row { flex-wrap: wrap; }
 .row > select, .row label > select { min-width: 0; max-width: 100%; }
@@ -298,7 +297,7 @@ label.inline { min-width: 0; }
   .file-actions {
     display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
     flex-direction: column; align-items: stretch; gap: 2px; padding: 6px; min-width: 220px;
-    max-height: calc(100dvh - var(--top-h, 48px) - 12px); overflow-y: auto; overscroll-behavior: contain;
+    max-height: calc(100vh - var(--top-h, 48px) - 12px); max-height: calc(100dvh - var(--top-h, 48px) - 12px); overflow-y: auto; overscroll-behavior: contain;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: 0 8px 24px rgba(0,0,0,.18);
   }
@@ -337,9 +336,6 @@ label.inline { min-width: 0; }
   .sidebar:not(.expanded) .tabs, .sidebar:not(.expanded) .panel { display: none; }
   .sidebar.expanded { height: 55%; }
   /* in the sheet, colors come first; the palette controls follow below them */
-  .sidebar.expanded [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
-  [data-panel=palette] #ownedHint { order: -2; }
-  [data-panel=palette] #swatches { order: -1; margin-bottom: 10px; }
   .sheet-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 52px; }
   .toolbar {
     order: 2; width: auto; flex: none; flex-direction: row; align-items: center; gap: 2px;
@@ -362,6 +358,8 @@ label.inline { min-width: 0; }
   .toolbar { gap: 0; }
   .zoom button { width: 36px; }
 }
+/* swatches moved up under the search row (compact layouts): a gap before the other controls */
+.swatches.near-top { margin-bottom: 10px; }
 /* the quick-color row */
 .quick { flex: 1; display: flex; gap: 6px; overflow-x: auto; align-items: center; scrollbar-width: none; min-width: 0; padding: 2px; }
 .quick::-webkit-scrollbar { display: none; }
@@ -396,14 +394,12 @@ label.inline { min-width: 0; }
 }
 /* phones in landscape and folded foldables have no bottom sheet, but the quick row
    and swatches-first order help just as much there */
-@media (max-height: 520px) and (min-width: 600px), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2) {
+@media (max-height: 520px) and (min-width: 600px) and (pointer: coarse), (vertical-viewport-segments: 2), (horizontal-viewport-segments: 2) {
+  .toolbar .current { display: none; } /* the quick row shows it */
   .sidebar .sheet-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; min-height: 0; border-bottom: 1px solid var(--line); }
   .sidebar .sheet-toggle { display: none; }
   .sidebar .quick .sw { width: 36px; height: 36px; }
   .sidebar .quick .sw.current { width: 42px; height: 42px; }
-  [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
-  [data-panel=palette] #ownedHint { order: -2; }
-  [data-panel=palette] #swatches { order: -1; margin-bottom: 10px; }
 }
 /* tiny screens (flip-phone cover displays): everything slimmer, and the open sheet
    takes the whole canvas area with the swatches first (picking closes it again) */
@@ -417,6 +413,11 @@ label.inline { min-width: 0; }
   .workspace.sheet-open .stage { display: none; }
   .sidebar.expanded { flex: 1; height: auto; min-height: 0; }
   .sidebar.expanded .tabs button { padding: 6px; }
+}
+
+@media (max-height: 520px) and (max-width: 379px) {
+  .tool { min-width: 34px; flex: 1 1 34px; }
+  .zoom button { width: 36px; }
 }
 
 /* Foldables bent at the hinge (Viewport Segments). Flip phone or foldable half-open
@@ -434,7 +435,6 @@ label.inline { min-width: 0; }
   .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
   .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
   .sheet-toggle { display: none; }
-  .sidebar:not(.expanded) [data-panel=palette]:not([hidden]), .sidebar [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
   /* messages go in the top half, above the hinge */
   .toast { inset: auto auto calc(100% - env(viewport-segment-bottom 0 0) + 8px) 50%; }
   .toolbar {
@@ -462,12 +462,17 @@ label.inline { min-width: 0; }
   .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
   .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
   .sheet-toggle { display: none; }
-  .sidebar:not(.expanded) [data-panel=palette]:not([hidden]), .sidebar [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
   .toolbar { order: 0; display: flex; width: 64px; flex-direction: column; align-items: center; overflow-y: auto; border-top: 0; border-right: 1px solid var(--line); }
   .tool { width: 54px; }
+  .toolbar .current { flex-direction: column; grid-column: auto; }
+  .zoom { flex-direction: column; grid-column: auto; margin: auto 0 0; }
+  .zoom button { width: 44px; }
+  /* messages in the right half, clear of the hinge */
+  .toast { left: calc(env(viewport-segment-left 1 0) + env(viewport-segment-width 1 0) / 2); max-width: calc(env(viewport-segment-width 1 0) - 32px); }
   .stage { order: 1; }
 }
 
+/* Printing: only the per-tray sheets */
 @media print {
   body { display: block; overflow: visible; background: #fff; color: #000; }
   body > *:not(.print-root) { display: none !important; }

@@ -745,12 +745,12 @@ test('printed sheets show their headings', async (p) => {
   const h = await p.evaluate(() => [...document.querySelectorAll('#printRoot .sheet h2')].map((e) => e.getBoundingClientRect().height));
   assert(h.length && h.every((x) => x > 10), `sheet headings ${JSON.stringify(h)}`);
 });
-test('flip phone cover screen: a message with the sheet open stays on screen and can be dismissed', async (p) => {
+test('flip phone cover screen: a message with the sheet open stays on screen, clear of the top bar, and can be dismissed', async (p) => {
   await p.tap('#sheetToggle'); await p.waitForTimeout(150);
   await p.setInputFiles('#openFile', { name: 'x.pindou.json', mimeType: 'application/json', buffer: Buffer.from('{bad') });
   await p.waitForFunction(() => !document.querySelector('#toast').hidden);
-  const r = await p.evaluate(() => { const t = document.querySelector('#toast').getBoundingClientRect(); return [t.top >= 0, t.bottom <= innerHeight]; });
-  eq(r, [true, true], 'message on screen');
+  const r = await p.evaluate(() => { const t = document.querySelector('#toast').getBoundingClientRect(); return [t.top >= 0, t.bottom <= innerHeight, t.top >= document.querySelector('.topbar').getBoundingClientRect().bottom]; });
+  eq(r, [true, true, true], 'message on screen, below the top bar');
   assert(await tappable(p, '#toastClose'), 'Dismiss cannot be tapped');
 }, touch(SCREENS['flip phone cover screen']));
 test('flip phone: a search and "edit my collection" set on the main screen can be undone on the cover screen', async (p) => {
@@ -778,18 +778,35 @@ test('rotating keeps keyboard focus somewhere useful', async (p) => {
   await p.focus('#guides'); // in the stage bar above the canvas in portrait
   eq(await p.evaluate(() => document.activeElement.id), 'guides', 'focus on Guides');
   await p.setViewportSize({ width: 780, height: 412 }); await p.waitForTimeout(200); // the bar moves into the ⋯ menu
-  assert(await p.evaluate(() => document.activeElement !== document.body), 'focus dropped to the page after the settings moved into ⋯');
+  eq(await p.evaluate(() => document.activeElement.id), 'moreBtn', 'focus after the settings moved into ⋯');
 }, touch({ width: 780, height: 412 }));
 test('phone: Escape in the palette search clears the search, not the sheet', async (p) => {
   await p.tap('#sheetToggle');
   await p.fill('#paletteSearch', 'A'); await p.focus('#paletteSearch'); await p.keyboard.press('Escape');
   eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'true', 'sheet stays open');
 }, touch(SCREENS['foldable cover / tall phone']));
-test('phones in landscape: quick colors at the top of the sidebar, swatches before the controls', async (p) => {
+test('phones in landscape: quick colors at the top of the sidebar; search, then swatches, then the other controls', async (p) => {
   assert(await tappable(p, '#quickColors [data-q=current]'), 'no quick row');
-  const r = await p.evaluate(() => [document.querySelector('#swatches').getBoundingClientRect().top, document.querySelector('#paletteSelect').getBoundingClientRect().top]);
-  assert(r[0] < r[1], 'controls before the swatches');
+  assert(await tappable(p, '#paletteSearch'), 'search not reachable without scrolling');
+  const r = await p.evaluate(() => ['#paletteSearch', '#swatches', '#paletteView'].map((s) => document.querySelector(s).getBoundingClientRect().top));
+  assert(r[0] < r[1] && r[1] < r[2], `order on screen ${r}`);
 }, touch(SCREENS['small phone in landscape']));
+test('phone sheet: search is right there, and Tab order matches what is on screen', async (p) => {
+  await p.tap('#sheetToggle'); await p.waitForTimeout(150);
+  assert(await tappable(p, '#paletteSearch'), 'search not reachable when the sheet opens');
+  assert(await tappable(p, '#swatches .sw'), 'no swatch when the sheet opens');
+  const order = await p.evaluate(() => {
+    const els = ['#paletteSearch', '#swatches .sw', '#paletteView'].map((s) => document.querySelector(s));
+    const dom = els.every((e, i) => i === 0 || (els[i - 1].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const tops = els.map((e) => e.getBoundingClientRect().top);
+    return { dom, screen: tops[0] < tops[1] && tops[1] < tops[2] };
+  });
+  eq(order, { dom: true, screen: true }, 'search → swatches → other controls');
+}, touch(SCREENS['foldable cover / tall phone']));
+test('desktop keeps the palette controls above the swatches', async (p) => {
+  const r = await p.evaluate(() => ['#paletteView', '#editOwned', '#swatches'].map((s) => document.querySelector(s).getBoundingClientRect().top));
+  assert(r[0] < r[2] && r[1] < r[2], `order ${r}`);
+});
 test('flip phone half-open: the current color does not pretend to open a sheet', async (p) => {
   await fold(p, { width: 412, height: 820 }, 'horizontal', 400, 20);
   await p.tap('#quickColors [data-q=current]');
@@ -821,6 +838,29 @@ test('low desktop window (1024×540): every tool and zoom button reachable', asy
   for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
   for (const a of ['zoom-in', 'zoom-fit', 'zoom-out']) assert(await tappable(p, `[data-action=${a}]`), a);
 }, { viewport: { width: 1024, height: 540 } });
+test('folding and unfolding keeps keyboard focus on a visible control', async (p) => {
+  const visibleFocus = () => p.evaluate(() => document.activeElement !== document.body && document.activeElement.getClientRects().length > 0);
+  await p.focus('#sheetToggle');
+  await fold(p, { width: 412, height: 820 }, 'horizontal', 400, 20);
+  assert(await visibleFocus(), 'focus lost when folding');
+  await p.focus('#swatches .sw');
+  const cdp = await p.ctx.newCDPSession(p);
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 412, height: 820, deviceScaleFactor: 1, mobile: true });
+  await p.waitForTimeout(300);
+  assert(await visibleFocus(), 'focus lost when unfolding');
+}, touch({ width: 412, height: 820 }));
+test('book-style fold on a lower screen (960×600): zoom buttons reachable, messages in the right half', async (p) => {
+  await fold(p, { width: 960, height: 600 }, 'vertical', 470, 20);
+  for (const a of ['zoom-in', 'zoom-fit', 'zoom-out']) assert(await tappable(p, `[data-action=${a}]`), a);
+  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await p.waitForFunction(() => !document.querySelector('#toast').hidden);
+  const r = await p.evaluate(() => ({ left: document.querySelector('#toast').getBoundingClientRect().left, x1: window.viewport.segments[1].x }));
+  assert(r.left >= r.x1, `message starts at ${r.left}, right half at ${r.x1}`);
+}, { viewport: { width: 960, height: 600 } });
+test('tiny cover screen (300×330): Fit still reachable', async (p) => {
+  assert(await tappable(p, '[data-action=zoom-fit]'), 'Fit');
+  for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
+}, touch({ width: 300, height: 330 }));
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);
