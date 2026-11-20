@@ -1416,7 +1416,9 @@ test('QR: the Share dialog shows a QR code that scans to the exact link', async 
   await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open);
   eq(await p.evaluate(() => document.querySelector('#linkQrBox').hidden), true, 'QR shown before asking');
   await p.click('#linkQrBtn');
-  eq(await decodeQr(p, { selector: '#linkQrBox canvas' }), await p.inputValue('#linkText'), 'decoded QR');
+  // decode what's on the screen, not the canvas's own pixels
+  const shot = await p.locator('#linkQrBox canvas').screenshot();
+  eq(await decodeQr(p, { dataUrl: 'data:image/png;base64,' + shot.toString('base64') }), await p.inputValue('#linkText'), 'decoded QR on screen');
   assert(await tappable(p, '#linkQrBtn'), 'button not tappable');
   await p.click('#linkQrBtn');
   eq(await p.evaluate(() => document.querySelector('#linkQrBox').hidden), true, 'Hide QR code');
@@ -1446,7 +1448,7 @@ test('QR: with the toggle on, the PNG export carries a QR code of the design\'s 
   const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
   // the QR sits at the bottom left, above the credit line
   const size = await p.evaluate(async (u) => { const i = new Image(); i.src = u; await i.decode(); return [i.width, i.height]; }, dataUrl);
-  const got = await decodeQr(p, { dataUrl, crop: [0, Math.max(0, size[1] - 900), Math.min(size[0], 900), Math.min(size[1], 900)] });
+  const got = await decodeQr(p, { dataUrl, crop: [0, Math.round(size[1] * 0.55), size[0], size[1] - Math.round(size[1] * 0.55)] });
   eq(got, want, 'decoded QR in the PNG');
   // and it opens this design
   const d = await p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length, got);
@@ -1496,6 +1498,57 @@ test('QR: renaming the design updates the link the QR codes carry', async (p) =>
   eq(await p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).name, after), 'Renamed swallow', 'name in the link');
 });
 
+for (const [label, opts, beadsN] of [['a long link, normal screen', {}, 0], ['a long link, high-density phone screen', { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 }, 0]]) {
+  test(`QR: the Share dialog's code scans from the screen (${label})`, async (p) => {
+    // a ~2,000+ character link: a dense code, where uneven module sizes stop it scanning
+    await p.evaluate(() => {
+      const pal = __pindou.S.palette, n = 62;
+      __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'dense', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.slice(0, 12).map((c) => c.code), cells: Array.from({ length: n * n }, () => (Math.random() * 12) | 0) });
+    });
+    if (opts.viewport) { await p.tap('#moreBtn'); await p.tap('[data-action=share-link]'); } else await p.click('[data-action=share-link]');
+    await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+    const link = await p.inputValue('#linkText');
+    assert(link.length > 1800 && link.length < 2900, 'test link is ' + link.length);
+    await p.click('#linkQrBtn');
+    const shot = await p.locator('#linkQrBox canvas').screenshot();
+    eq(await decodeQr(p, { dataUrl: 'data:image/png;base64,' + shot.toString('base64') }), link, 'decoded QR on screen');
+  }, opts.viewport ? { ...opts, hasTouch: true, isMobile: true } : opts);
+}
+test('QR: once the link is ready, Ctrl+P prints a QR of the current design (after an edit, and after a reload)', async (p) => {
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]'); await p.keyboard.press('Escape');
+  const printed = async () => {
+    await p.evaluate(() => { document.querySelector('#printRoot').innerHTML = ''; window.dispatchEvent(new Event('beforeprint')); });
+    const got = await decodeQr(p, { selector: '#printRoot canvas.sheet-qr' });
+    assert(got, 'no QR printed');
+    return p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length, got);
+  };
+  await stroke(p, 7); await p.waitForTimeout(1500);
+  eq(await printed(), 7, 'beads in the printed QR after an edit');
+  await p.waitForTimeout(500); // autosave
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady); await p.waitForTimeout(1500);
+  eq(await printed(), 7, 'beads in the printed QR after a reload');
+});
+test('QR: a double click on Print opens one print dialog', async (p) => {
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  await p.evaluate(() => { window.__prints = 0; window.print = () => { window.__prints++; }; });
+  await stroke(p, 4);
+  await p.evaluate(() => { const b = document.querySelector('[data-action=print-trays]'); b.click(); b.click(); });
+  await p.waitForTimeout(800);
+  eq(await p.evaluate(() => window.__prints), 1, 'print dialogs');
+});
+test('QR: the export toggle is announced by its words, not the box drawn before them', async (p) => {
+  await p.click('[data-action=toggle-export]');
+  eq(await p.getByRole('button', { name: 'Add a QR code (PNG & print)', exact: true }).count(), 1, 'button with that exact name');
+});
+test('share link: addresses that only work on this computer are recognised', async (p) => {
+  const r = await p.evaluate(() => {
+    const host = (u) => new URL(u).hostname;
+    return ['http://localhost:8000/', 'http://127.0.0.1:8000/', 'http://127.1/', 'http://0.0.0.0:8000/', 'http://pindou.localhost/', 'http://[::1]:8000/', 'http://[::ffff:127.0.0.1]/',
+      'https://dani-the-alien.github.io/pindou-studio/', 'http://192.168.1.20:8000/', 'https://example.com/']
+      .map((u) => __pindou.isLocalAddress(host(u), 'http:'));
+  });
+  eq(r, [true, true, true, true, true, true, true, false, false, false], 'local?');
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

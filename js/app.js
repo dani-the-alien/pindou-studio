@@ -1061,9 +1061,14 @@
   // Where links (and QR codes) for other people point: this address, unless it only works
   // on this computer (a local copy or the desktop install), then the public site.
   const PUBLIC_URL = 'https://dani-the-alien.github.io/pindou-studio/';
+  // Addresses that only work on this computer: localhost (and *.localhost), 0.0.0.0 (as
+  // python -m http.server prints it), 127.x.x.x, ::1 and its IPv4-mapped form, file:.
+  function isLocalAddress(host, protocol) {
+    return protocol === 'file:'
+      || /^(localhost\.?|.*\.localhost\.?|0\.0\.0\.0|127(\.\d+){3}|\[::1\]|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\])$/i.test(host);
+  }
   function shareBase() {
-    const local = location.protocol === 'file:' || /^(localhost|127(\.\d+){3}|\[::1\])$/.test(location.hostname);
-    return local ? PUBLIC_URL : location.href.split('#')[0];
+    return isLocalAddress(location.hostname, location.protocol) ? PUBLIC_URL : location.href.split('#')[0];
   }
   // A link to the current design for others, kept ready for exports (the browser's own
   // Ctrl+P prints at once, while making a link takes a moment). null if it can't be made.
@@ -1182,10 +1187,16 @@
     if (!box.hidden) { box.hidden = true; box.replaceChildren(); $('#linkQrBtn').textContent = 'Show QR code'; return; }
     const qr = makeQr($('#linkText').value);
     if (!qr) return;
-    const c = qrCanvas(qr, 4);
+    box.hidden = false;
+    // Every module the same whole number of screen pixels: a stretched code scans badly.
+    const dpr = window.devicePixelRatio || 1, n = qr.size + 8;
+    const room = Math.min(340, box.clientWidth || 340);
+    const k = Math.max(1, Math.floor(room * dpr / n));
+    const c = qrCanvas(qr, k);
+    c.style.width = c.style.height = `${(n * k) / dpr}px`;
     c.className = 'qr'; c.setAttribute('role', 'img'); c.setAttribute('aria-label', 'QR code of the link');
     const note = document.createElement('p'); note.className = 'hint'; note.textContent = 'Scan it with a phone camera to open this design in Pindou Studio.';
-    box.replaceChildren(c, note); box.hidden = false;
+    box.replaceChildren(c, note);
     $('#linkQrBtn').textContent = 'Hide QR code';
   }
   async function copyLink() {
@@ -1621,11 +1632,8 @@
   }
 
   async function exportPng() {
-    let qr = null;
-    if (S.qrExport) {
-      qr = makeQr(await currentLink());
-      if (!qr) toast(`This design's link is too long for a QR code (${QR_MAX_NOTE}), so the PNG has none.`);
-    }
+    // The link is taken now, with the drawing below, so the QR matches the pattern.
+    const linkP = S.qrExport ? currentLink() : null;
     const cs = clamp(Math.floor(5000 / Math.max(S.w, S.h)), 4, 24);
     const pattern = renderRegion({ x: 0, y: 0, w: S.w, h: S.h }, cs, { codes: true, rulers: true });
     const list = usedList(countRegion(), 'code');
@@ -1634,17 +1642,26 @@
     const cols = Math.max(1, Math.floor((pattern.width - 20) / colW));
     const rows = Math.ceil(list.length / cols);
     const head = 56;
+    const name = S.name, info = `${S.w}×${S.h} beads · ${traysAcross()}×${traysDown()} trays of ${S.tray} · ${fmt(total)} beads · ${list.length} colors · ${PALETTES[S.paletteId].name}`;
+    let qr = null;
+    if (linkP) {
+      const url = await linkP;
+      qr = makeQr(url);
+      if (!qr) toast(url ? `This design's link is too long for a QR code (${QR_MAX_NOTE}), so the PNG has none.` : "This browser can't make design links, so the PNG has no QR code.");
+    }
     const out = document.createElement('canvas');
     const foot = 28;
-    const qrImg = qr ? qrCanvas(qr, 4) : null, qrH = qrImg ? qrImg.height + 16 : 0;
+    // about a fifth of the image wide, so it still scans when the PNG is printed to fit a page
+    const qrPx = qr ? Math.max(4, Math.floor(Math.max(pattern.width, 480) / 5 / (qr.size + 8))) : 0;
+    const qrImg = qr ? qrCanvas(qr, qrPx) : null, qrH = qrImg ? qrImg.height + 16 : 0;
     out.width = Math.max(pattern.width, 480, qrImg ? qrImg.width + 24 + 260 : 0);
     out.height = head + pattern.height + 30 + rows * rowH + 20 + qrH + foot;
     const g = out.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, out.width, out.height);
     g.fillStyle = '#111'; g.font = '700 20px system-ui, sans-serif'; g.textBaseline = 'top';
-    g.fillText(S.name, 12, 10);
+    g.fillText(name, 12, 10);
     g.font = '13px system-ui, sans-serif'; g.fillStyle = '#555';
-    g.fillText(`${S.w}×${S.h} beads · ${traysAcross()}×${traysDown()} trays of ${S.tray} · ${fmt(total)} beads · ${list.length} colors · ${PALETTES[S.paletteId].name}`, 12, 34);
+    g.fillText(info, 12, 34);
     g.drawImage(pattern, 0, head);
     let y0 = head + pattern.height + 20;
     g.font = '600 13px system-ui, sans-serif'; g.textBaseline = 'middle';
@@ -1665,7 +1682,7 @@
     }
     g.font = '12px system-ui, sans-serif'; g.fillStyle = '#666'; g.textBaseline = 'bottom';
     g.fillText(CREDIT, 12, out.height - 10);
-    out.toBlob((b) => download(safeName(S.name) + '.png', b), 'image/png');
+    out.toBlob((b) => download(safeName(name) + '.png', b), 'image/png');
   }
 
   function exportCsv() {
@@ -1680,8 +1697,14 @@
     download(safeName(S.name) + '-beads.csv', new Blob(['﻿' + lines.join('\n') + '\n'], { type: 'text/csv' }));
   }
 
+  let printing = false;
   async function printTrays() {
-    if (S.qrExport) await currentLink(); // so the QR page is ready
+    if (printing) return; // a double click
+    printing = true;
+    try {
+      // so the QR page is ready (again if the design changed meanwhile)
+      for (let i = 0; S.qrExport && freshLink() === undefined && i < 3; i++) await currentLink();
+    } finally { printing = false; }
     buildPrintSheets();
     saveBeforeDialog();
     window.print();
@@ -1735,7 +1758,8 @@
         const p = document.createElement('p'); p.className = 'sheet-sub';
         p.textContent = url === undefined
           ? 'The QR code was still being made when printing started. Print again from Export → Print per-tray sheets to include it.'
-          : `This design's link is too long for a QR code (${QR_MAX_NOTE}). Save the design as a file to share it instead.`;
+          : url === null ? "This browser can't make design links, so there's no QR code."
+            : `This design's link is too long for a QR code (${QR_MAX_NOTE}). Save the design as a file to share it instead.`;
         sec.appendChild(p);
       }
       root.appendChild(sec);
@@ -2553,6 +2577,6 @@
   let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, get tabReady() { return tabReady; } };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, get tabReady() { return tabReady; } };
   boot();
 })();
