@@ -16,12 +16,15 @@
 # Options:
 #   --app-window ID     open in its own window using a Chromium-family Flatpak
 #                       (e.g. com.google.Chrome, org.chromium.Chromium, com.brave.Browser)
-#   --browser-tab       go back to opening in the default browser
+#   --browser-tab       open in the default browser (the default)
 #   --desktop-shortcut  also put a launcher icon on the desktop
+#   --change-address    allow an update to change the port or the window mode. Without
+#                       it, an update keeps both: the browser keeps autosaved work per
+#                       address and per browser, so changing either hides that work.
 # Environment:
 #   PINDOU_PORT         port to serve on (1024-65535). Defaults to the port used last
-#                       time, or 8642. Keep it the same once someone has used the app:
-#                       the browser keeps autosaved work per address.
+#                       time (also found from installs made before install.conf existed),
+#                       or 8642 for a first install.
 set -euo pipefail
 
 die() { echo "Error: $*" >&2; exit 1; }
@@ -37,24 +40,45 @@ UNIT="$CONF/systemd/user/pindou-studio.service"
 DESKTOP_FILE="$DATA/applications/pindou-studio.desktop"
 ICON="$DATA/icons/hicolor/scalable/apps/pindou-studio.svg"
 
-# Options from last time, then the command line.
-SAVED_PORT=""; SAVED_APP_WINDOW=""
+# Options from last time: install.conf, or for installs made before install.conf
+# existed, the existing service (port) and launcher (window mode).
+EXISTING=0; SAVED_PORT=""; SAVED_APP_WINDOW=""
 if [ -f "$CONFFILE" ]; then
+  EXISTING=1
   SAVED_PORT="$(sed -n 's/^PORT=\([0-9]*\)$/\1/p' "$CONFFILE")"
   SAVED_APP_WINDOW="$(sed -n 's/^APP_WINDOW=\([A-Za-z0-9._-]*\)$/\1/p' "$CONFFILE")"
+elif [ -f "$UNIT" ]; then
+  EXISTING=1
+  SAVED_PORT="$(sed -nE 's/^ExecStart=.*(http\.server|--port) ([0-9]+).*/\2/p' "$UNIT" | head -1)"
+  if [ -f "$APPDIR/launch.sh" ]; then
+    SAVED_APP_WINDOW="$(sed -nE 's/.*flatpak run ([A-Za-z0-9._-]+) --app=.*/\1/p' "$APPDIR/launch.sh" | head -1)"
+  fi
+fi
+if [ "$EXISTING" = 1 ] && [ -z "$SAVED_PORT" ] && [ -z "${PINDOU_PORT:-}" ]; then
+  die "found an existing install but couldn't tell which port it uses. Check: systemctl --user cat pindou-studio (look at ExecStart), then re-run with PINDOU_PORT=<that port>."
 fi
 PORT="${PINDOU_PORT:-${SAVED_PORT:-8642}}"
 APP_WINDOW="$SAVED_APP_WINDOW"
-DESKTOP_SHORTCUT=0
+DESKTOP_SHORTCUT=0; CHANGE_ADDRESS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --app-window) APP_WINDOW="${2:?--app-window needs a Flatpak app ID}"; shift 2 ;;
     --browser-tab) APP_WINDOW=""; shift ;;
     --desktop-shortcut) DESKTOP_SHORTCUT=1; shift ;;
+    --change-address) CHANGE_ADDRESS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
+# An update must not quietly move the app to another address or browser.
+if [ "$EXISTING" = 1 ] && [ "$CHANGE_ADDRESS" = 0 ]; then
+  if [ -n "$SAVED_PORT" ] && [ "$PORT" != "$SAVED_PORT" ]; then
+    die "Pindou Studio is already installed on port $SAVED_PORT. Changing the port hides the design autosaved there. Have the person press Save in Pindou Studio first, then re-run with --change-address. (To just update, run without PINDOU_PORT.)"
+  fi
+  if [ "$APP_WINDOW" != "$SAVED_APP_WINDOW" ]; then
+    die "this would switch Pindou Studio from ${SAVED_APP_WINDOW:-the default browser} to ${APP_WINDOW:-the default browser}, which keeps its own autosave. Have the person press Save first, then re-run with --change-address. (To just update, run without --app-window/--browser-tab.)"
+  fi
+fi
 
 # ---------- checks first: nothing is changed until these pass ----------
 [ -f "$SRC/index.html" ] && [ -f "$SRC/js/app.js" ] && [ -f "$SRC/desktop/serve.py" ] \
@@ -78,18 +102,23 @@ if [ -n "$APP_WINDOW" ] && ! flatpak info "$APP_WINDOW" >/dev/null 2>&1; then
   die "Flatpak '$APP_WINDOW' is not installed (see: flatpak list --app)."
 fi
 
-# Does Pindou Studio (and not some other program) answer on the port?
+# Does Pindou Studio (and not some other program) answer on the port? Recognizes
+# older versions too (by page title), and ignores any proxy settings.
 answering() { (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; }
 is_ours() {
   "$PY" -c 'import sys, urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 try:
-    body = urllib.request.urlopen("http://127.0.0.1:%s/" % sys.argv[1], timeout=2).read()
+    body = opener.open("http://127.0.0.1:%s/" % sys.argv[1], timeout=2).read()
 except Exception:
     sys.exit(1)
-sys.exit(0 if b"name=\"pindou-version\"" in body else 1)' "$PORT"
+sys.exit(0 if (b"name=\"pindou-version\"" in body or b"<title>Pindou Studio</title>" in body) else 1)' "$PORT"
 }
 if answering && ! is_ours; then
-  die "another program is already using port $PORT. Pick a free port with PINDOU_PORT=<port> (if Pindou Studio was used before at another port, ask before switching: autosaved work stays with the old address)."
+  if [ "$EXISTING" = 1 ]; then
+    die "another program is using port $PORT, where Pindou Studio is installed. Find it with: ss -ltnp 'sport = :$PORT' and, with the person's OK, stop it; then re-run this. Don't switch ports: the autosaved design lives at this address."
+  fi
+  die "another program is already using port $PORT. For a first install, pick a free port with PINDOU_PORT=<1024-65535>."
 fi
 
 URL="http://127.0.0.1:$PORT/"
@@ -115,7 +144,8 @@ cat > "$APPDIR/launch.sh" <<LAUNCH
 URL="$URL"
 systemctl --user start pindou-studio.service
 for _ in \$(seq 1 50); do
-  if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then exec $OPEN_CMD; fi
+  # Our service must be running: if another program grabbed the port, ours fails to start.
+  if systemctl --user is-active --quiet pindou-studio.service && (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then exec $OPEN_CMD; fi
   sleep 0.1
 done
 MSG="Pindou Studio's local server didn't start. Details: journalctl --user -u pindou-studio -n 50"

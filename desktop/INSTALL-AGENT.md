@@ -40,6 +40,8 @@ Why a local server instead of opening `index.html` directly: Bazzite's browsers 
    ```
    Expect `ID=bazzite` (or another Fedora/systemd distro), python3 and systemctl present, not in a container. If the last command shows an existing install, this is an **update**: skip to "Updating" below.
 
+   Also ask: **have they used Pindou Studio before**, somewhere else (another address such as `127.0.0.1:8000` or `localhost`, another browser, or the website)? A design autosaved there won't appear in the new install. If so, have them open it there and press **Save** first, so they can **Open** the file afterwards.
+
 2. **Put the folder somewhere durable** if it isn't already, for example `~/Applications/pindou-studio` (a `git clone` or an extracted tarball). The installer copies what it needs, so this folder is only used for installing and updating.
 
 3. **Read `desktop/install.sh`** (it's short), summarize it for the person, and ask two questions:
@@ -54,7 +56,7 @@ Why a local server instead of opening `index.html` directly: Bazzite's browsers 
    ```bash
    bash desktop/install.sh
    ```
-   (Add the flags chosen above.) The default port is 8642. If it says another program is using the port, pick a free one with `PINDOU_PORT=<1024-65535> bash desktop/install.sh`; it's remembered from then on. A successful run ends with `OK: Pindou Studio is answering at http://127.0.0.1:8642/`.
+   (Add the flags chosen above.) The default port is 8642. On a first install, if it says another program is using the port, pick a free one with `PINDOU_PORT=<1024-65535> bash desktop/install.sh`; it's remembered from then on. A successful run ends with `OK: Pindou Studio is answering at http://127.0.0.1:8642/`.
 
 5. **Verify:**
    ```bash
@@ -73,21 +75,21 @@ Get the new version into the same folder (`git pull`, or extract the new tarball
 ```bash
 bash desktop/install.sh
 ```
-It reuses the port and window mode from last time, replaces the app files, and keeps their autosaved design. Don't run the "is the port free" check from step 1 during an update: the port is in use by Pindou Studio itself, and that's expected.
+It reuses the port and window mode from last time (for installs made by older versions of the installer, it reads them from the existing service and launcher), replaces the app files, and keeps their autosaved design. It refuses to change the port or window mode during an update unless given `--change-address`; only use that after the person has pressed **Save**.
 
 ## Uninstalling
 
 ```bash
 bash desktop/uninstall.sh
 ```
-Removes the service, menu entry, icon, desktop shortcut, installed copy and remembered options. It doesn't touch saved `.pindou.json` files or the browser's stored data.
+Removes the service, menu entry, icon, desktop shortcut and installed copy. It keeps the remembered port and window mode (`~/.config/pindou-studio/install.conf`), so reinstalling brings the app back at the same address with its autosaved design; delete that file to forget them. It doesn't touch saved `.pindou.json` files or the browser's stored data.
 
 ## Troubleshooting
 
-- **The menu entry shows a "server didn't start" notice, or the page won't load:** `journalctl --user -u pindou-studio -n 50 --no-pager`. "Address already in use" means another program took the port: have them **Save** their design first, then re-run the installer with a different `PINDOU_PORT` and have them **Open** the saved file at the new address.
+- **The menu entry shows a "server didn't start" notice, or the page won't load:** `journalctl --user -u pindou-studio -n 50 --no-pager`. "Address already in use" means another program took the port. Find it with `ss -ltnp 'sport = :8642'` (their port), tell the person what it is, and with their OK stop or reconfigure it, then `systemctl --user restart pindou-studio`. Their design is still there once the port is free. Moving Pindou Studio to another port is a last resort: their autosaved design stays at the old address, which they can't open while the other program holds it, so they'd start empty at the new one (`PINDOU_PORT=<port> bash desktop/install.sh --change-address`).
 - **Service not running after a reboot:** `systemctl --user enable --now pindou-studio`.
 - **Something new is missing after an update** (an empty dropdown, a button that does nothing): have them press Ctrl+Shift+R once. Compare the version in the status bar with `const VERSION` in `js/app.js` of the folder you installed from.
-- **Wrong browser opens:** the menu entry uses the system default browser (`xdg-open`). Before changing it, have them **Save** their design (see the hard rules). Then either change the default in System Settings → Default Applications, or re-run the installer with `--app-window <id>` (or `--browser-tab` to go back), and have them **Open** the saved file in the new browser.
+- **Wrong browser opens:** the menu entry uses the system default browser (`xdg-open`). Before changing it, have them **Save** their design (see the hard rules). Then either change the default in System Settings → Default Applications, or re-run the installer with `--app-window <id> --change-address` (or `--browser-tab --change-address` to go back), and have them **Open** the saved file in the new browser.
 
 ## About the colors
 
