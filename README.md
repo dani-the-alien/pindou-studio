@@ -30,7 +30,7 @@ Your current design autosaves in the browser, **tied to that exact address and b
 
 ## Features
 
-- **Draw by hand**: pencil, eraser (or right-click), flood fill, eyedropper, swap every bead of one color, undo/redo. New, resize, Open, image import and palette switches can all be undone too.
+- **Draw by hand**: pencil, eraser (or right-click), flood fill, eyedropper, swap every bead of one color, undo/redo. New, resize, Open and image import can all be undone too.
 - **Palette views**: color families, hue (rainbow), value (light → dark), saturation, or MARD series order. Sorting uses OKLCH, so hues line up with color names.
 - **Image → pattern**: a tray-grid picker sets the size (click 2 × 3 to fit the picture into that many trays). Colors are matched with CIEDE2000. Options: a maximum number of colors (it merges whichever color is cheapest to lose, so small details like eyes survive), only the beads you own, Floyd–Steinberg dithering, and background removal. Large conversions run in the background with a progress readout.
 - **Multi-tray layout**: designs up to 624 × 624 beads. Tray boundaries are drawn on the canvas. Tray presets are 52, 72, 78 and 104 pegs per side, plus custom sizes. Focus mode shows one board at a time, with that board's own peg numbering and bead counts.
@@ -39,8 +39,9 @@ Your current design autosaves in the browser, **tied to that exact address and b
   - PNG pattern with a color legend; bead codes are printed in the cells for designs up to 416 beads per side.
   - CSV of bead counts, with a column per tray when the design spans more than one.
   - Print sheets: an overview, plus one page per tray to build from. A small single-tray design prints as one page with codes. The browser's own Print (Ctrl+P) works too.
-- **My collection**: mark which colors you own, then filter the palette or limit image conversion to them.
-- **Check my colors**: the two published MARD color lists disagree about a few bead codes (11 of them, some apparently typos). **Check my colors…** in the palette panel shows both candidate colors for each; hold your real bead against the screen and pick the closer one. Your choices are used for those codes everywhere on that device, in both palettes; designs don't change.
+- **One MARD palette**: all 291 MARD colors, the 221-color retail set plus the extended P/Q/R/T/Y/ZG series.
+- **My collection**: mark which colors you own (with presets for the 221 set and all 291), then filter the palette or limit image conversion to them.
+- **Check my colors**: the two published MARD color lists disagree about a few bead codes (11 of them, some apparently typos). **Check my colors…** in the palette panel shows both candidate colors for each; hold your real bead against the screen and pick the closer one. Your choices are used for those codes everywhere on that device; designs don't change.
 - **Phones, tablets and foldables**: on a phone the tools sit along the bottom and a row of quick colors (current, recent, and the colors in your design) is always in reach; ▴ opens the full palette and panels as a sheet. Small screens fold New/Image/Open/Save/Export into a ⋯ menu. Tablets in portrait dock the panels under the canvas. A foldable bent at its hinge puts the canvas on one half and the controls on the other.
 - **Exports say where they came from**: PNG patterns and printed sheets carry a small "Made with Pindou Studio" line with the app's address.
 - **Share as a link**: **Share** puts the whole design into a link (in the part after `#`, which browsers don't send to any server), ready to copy or send. Opening it gives the other person their own copy; if they already have a design open, they're asked first, and Undo brings theirs back. When a link comes out long (over 2,000 characters, where some chat apps cut links short and QR codes get dense) or too long for a link at all, the Share dialog also offers **a simpler version**: fewer colors (merged the same way image conversion picks colors) and stray single beads cleaned up, with a before/after preview and the link length. It suggests the most colors that still fit; only the link changes, unless you choose to use the simpler version in your design too (Undo brings yours back). To bookmark a design, turn on **Keep this design's link in the address bar** in the Share dialog, then bookmark the page as usual. Links made in a copy running on your own computer (`localhost`, `127.0.0.1`, the desktop install) point at the public site, so they work for whoever you send them to.
@@ -79,14 +80,16 @@ The running version is shown in the status bar (on phones and other small screen
 
 ## Palette data
 
-`data/mard-221.json` and `data/mard-291.json` are copied unchanged from [HansBug/pindou-color-data](https://github.com/HansBug/pindou-color-data) at commit `178dafb` (2026-05-19), folders `mard-221-alfonse-doudou` and `mard-291-github` (MIT, see `data/LICENSE-pindou-color-data`). `js/palettes.js` is generated from them by `tools/gen-palettes.py`, which sorts the codes and marks H1 as the clear bead.
+`data/mard-221.json` and `data/mard-291.json` are copied unchanged from [HansBug/pindou-color-data](https://github.com/HansBug/pindou-color-data) at commit `178dafb` (2026-05-19), folders `mard-221-alfonse-doudou` and `mard-291-github` (MIT, see `data/LICENSE-pindou-color-data`). `js/palettes.js` is generated from them by `tools/gen-palettes.py` as **one MARD palette**: every code in either list (the 291-color list includes all 221 codes), sorted, with H1 marked as the clear bead and the 221 retail set marked for the "My collection" preset.
 
-There is no official machine-readable MARD hex list; these values are community approximations, and screens vary. The two palettes come from **different sources**:
+There is no official machine-readable MARD hex list; these values are community approximations, and screens vary. The two lists come from **different sources**:
 
 - **MARD 221** is the alfonse.online / doudougongfang data.
 - **MARD 291**'s first 221 codes come from get-colors-from-beans.
 
-They agree on 144 codes and differ on 77. Most differences are tiny (median ΔE2000 ≈ 0.75; 62 of the 77 are under 2). A few are large: H13, A25, F11 and G8 differ by ΔE2000 9.5–15.6. Several of those look like hex typos in one of the sources (H13 is `#F4EDF1` in one and `#F4EFD1` in the other), though it isn't known which side is right. Because of this, switching between the two palettes shifts those 77 colors slightly. For close calls, compare against a physical MARD color card.
+They agree on 144 codes and differ on 77. Most differences are tiny (median ΔE2000 ≈ 0.75; 62 of the 77 are under 2). A few are large: H13, A25, F11 and G8 differ by ΔE2000 9.5–15.6. Several of those look like hex typos in one of the sources (H13 is `#F4EDF1` in one and `#F4EFD1` in the other), though it isn't known which side is right. Pindou Studio uses the 221-color list's value for each of its codes (and the 291-color list's for the rest), and keeps the other value too: where the two differ visibly (ΔE2000 > 3, 11 codes), **Check my colors** lets you pick the one that matches your real beads. For close calls, compare against a physical MARD color card.
+
+Until version 1.4 there were two palettes to switch between ("MARD 221" and "MARD 291"). Files, links and autosaves from then open into the single palette with every color intact, and "My collection" is carried over (one never changed on MARD 221 becomes the 221 set). Files, links and autosaves still name the palette "mard291", whose codes are exactly the single palette's, so older copies of Pindou Studio open them without losing beads.
 
 H1 is treated as the clear (transparent) bead and is never used when converting pictures.
 

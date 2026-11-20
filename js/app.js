@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.4'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.4.0'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -61,7 +61,7 @@
   // ---------- state ----------
   const S = {
     name: 'Untitled',
-    paletteId: 'mard221',
+    paletteId: 'mard', // one MARD palette; older files and links name mard221/mard291 and open into it
     palette: [],
     codeIndex: new Map(),
     w: 52, h: 52, tray: 52,
@@ -93,17 +93,15 @@
     if (!disputed) disputed = findDisputed(DISPUTE_DE);
     return disputed;
   }
+  // Each color has the 221-color list's value (hex) and, where it differs, the 291-color
+  // list's (alt); see tools/gen-palettes.py.
   function findDisputed(minDE) {
-    const lists = Object.values(PALETTES).map((p) => new Map(p.colors.map((c) => [c.code, c])));
     const lab = (hex) => Color.rgbToLab(...Color.hexToRgb(hex));
     const found = [];
-    for (const [code, c] of lists[0]) {
-      if (c.transparent || lists.some((l) => !l.has(code))) continue;
-      const hexes = [...new Set(lists.map((l) => l.get(code).hex.toUpperCase()))];
-      if (hexes.length < 2) continue;
-      let most = 0;
-      for (let a = 0; a < hexes.length; a++) for (let b = a + 1; b < hexes.length; b++) most = Math.max(most, Color.deltaE2000(lab(hexes[a]), lab(hexes[b])));
-      if (most > minDE) found.push({ code, hexes });
+    for (const c of PALETTES[S.paletteId].colors) {
+      if (c.transparent || !c.alt) continue;
+      const hexes = [c.hex.toUpperCase(), c.alt.toUpperCase()];
+      if (Color.deltaE2000(lab(hexes[0]), lab(hexes[1])) > minDE) found.push({ code: c.code, hexes });
     }
     return found;
   }
@@ -197,46 +195,39 @@
   function sortedPalette(view) {
     return S.palette.slice().sort(PALETTE_VIEWS[view].sort);
   }
+  // "My collection": one list of codes. Before there was one MARD palette, each of the two
+  // palettes had its own; the first time, the one for the palette last used is carried over.
+  const OWNED_KEY = 'pindou.owned.mard';
+  function loadOwned() {
+    const all = S.palette.map((c) => c.code);
+    const list = store.get(OWNED_KEY, null);
+    if (Array.isArray(list)) return new Set(list.filter((c) => typeof c === 'string'));
+    // From before 1.4: the palette last used (the default was MARD 221) and its collection;
+    // a collection never saved meant "all of that palette's colors".
+    const auto = store.get('pindou.autosave', null);
+    const old221 = store.get('pindou.owned.mard221', null), old291 = store.get('pindou.owned.mard291', null);
+    if (!auto && !Array.isArray(old221) && !Array.isArray(old291)) return new Set(all); // new here: all 291
+    const known = auto && (auto.palette === 'mard221' || auto.palette === 'mard291') ? auto.palette : null;
+    // no readable autosave: whichever collection was saved (221's first), else MARD 221
+    const last = known || (Array.isArray(old221) ? 'mard221' : Array.isArray(old291) ? 'mard291' : 'mard221');
+    const saved = last === 'mard291' ? old291 : old221;
+    const set = Array.isArray(saved) ? saved.filter((c) => typeof c === 'string')
+      : last === 'mard291' ? all : PALETTES[S.paletteId].colors.filter((c) => c.in221).map((c) => c.code);
+    store.set(OWNED_KEY, set); // once: later the autosave says mard291 for everyone
+    return new Set(set);
+  }
   // Make `id` the active palette. This does NOT touch the design: callers hand
-  // applyState() cells that already refer to the new palette (see switchPalette).
+  // applyState() cells that already refer to the new palette.
   function setPalette(id) {
     const keep = S.palette[S.color] && S.palette[S.color].code;
     S.paletteId = id;
     S.palette = buildPalette(id);
     S.codeIndex = new Map(S.palette.map((c) => [c.code, c.i]));
-    S.owned = new Set(store.get('pindou.owned.' + id, S.palette.map((c) => c.code)));
+    S.owned = loadOwned();
     S.color = keep && S.codeIndex.has(keep) ? S.codeIndex.get(keep) : 0;
     imgState.result = null; // a conversion made with the old palette must never be applied
     imgState.caches = new Map();
     cancelConvert();
-  }
-  // Switch palettes as one undoable step. Colors the new palette lacks are replaced
-  // by their nearest match, after asking, since that changes the design.
-  function switchPalette(id) {
-    if (id === S.paletteId) return;
-    const target = buildPalette(id);
-    const index = new Map(target.map((c) => [c.code, c.i]));
-    const solid = target.filter((c) => !c.transparent);
-    const used = countRegion();
-    const map = new Int16Array(S.palette.length);
-    const lost = []; let lostBeads = 0;
-    S.palette.forEach((c, i) => {
-      if (index.has(c.code)) { map[i] = index.get(c.code); return; }
-      let best = solid[0].i, bd = Infinity;
-      for (const t of solid) { const d = Color.deltaE2000(c.lab, t.lab); if (d < bd) { bd = d; best = t.i; } }
-      map[i] = best;
-      if (used[i]) { lost.push(c.code); lostBeads += used[i]; }
-    });
-    const name = PALETTES[id].name;
-    if (lost.length) saveBeforeDialog();
-    if (lost.length && !confirm(`${name} doesn't have ${lost.length} of the colors in this design (${lost.slice(0, 12).join(', ')}${lost.length > 12 ? ', …' : ''}).\n\nSwitching replaces those ${fmt(lostBeads)} beads with the closest ${name} colors. You can undo it afterwards.`)) {
-      $('#paletteSelect').value = S.paletteId;
-      return;
-    }
-    if (!tab.editing) { $('#paletteSelect').value = S.paletteId; return; } // handed over while the confirm() was open
-    const cells = S.cells.map((v) => (v < 0 ? -1 : map[v]));
-    replaceState({ ...snapshot(), paletteId: id, cells },
-      lost.length ? `Switched to ${name}: ${fmt(lostBeads)} beads changed to the closest colors. Undo switches back.` : `Switched to ${name}`);
   }
   const allSolid = () => S.palette.filter((c) => !c.transparent).map((c) => c.i);
   function nearest(lab, candidates) {
@@ -496,7 +487,7 @@
     S.stroke = null; pixDirty = true; requestDraw();
     designChanged(); // a link made mid-stroke has beads that are now gone
   }
-  // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
+  // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, a simpler version).
   function snapshot() { return { paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: S.cells.slice() }; }
   const UNDO_STEPS = 200, UNDO_BYTES = 64 * 1024 * 1024;
   const recBytes = (r) => (r.type === 'cells' ? r.idx.length * 8 : (r.before.cells.length + r.after.cells.length) * 2);
@@ -534,12 +525,11 @@
     rebuildPixmap();
     if (dimsChanged) fitView();
   }
-  // Restore a whole-design state, switching palette and tray size if it needs them.
+  // Restore a whole-design state, changing tray size (and palette, at start-up) if it needs them.
   function applyState(st) {
     designChanged();
     if (st.paletteId && st.paletteId !== S.paletteId) {
       setPalette(st.paletteId);
-      $('#paletteSelect').value = st.paletteId;
       selectColor(S.color);
     }
     if (st.tray && st.tray !== S.tray) { S.tray = st.tray; S.focus = null; syncTraySelect(); }
@@ -785,7 +775,7 @@
     if (done) {
       const fixed = check.list.filter((d) => fixFor(d.code));
       $('#checkSummaryText').textContent = fixed.length
-        ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, in both palettes, on this device.`
+        ? `Your choices: ${fixed.map((d) => `${d.code} ${fixFor(d.code)}`).join(', ')}. They're used wherever these codes appear, on this device.`
         : 'No choices made: the colors are as published.';
       $('#checkReset').hidden = !fixed.length;
       // move focus only from the step that just ended (not when another tab's change re-renders it)
@@ -1155,6 +1145,11 @@
   }
 
   // ---------- persistence ----------
+  // Files, links and the autosave name the palette "mard291": the one palette has exactly
+  // that list's codes, so copies of Pindou Studio from before 1.4 (a tab still open, a
+  // cached page, someone else's) open them without losing any bead. Reading accepts
+  // mard, mard221 and mard291 (anything unknown also opens into the one palette, by code).
+  const SAVED_PALETTE = 'mard291';
   function serialize(from = S.cells) {
     const used = new Map(); const legend = [];
     const cells = new Array(from.length);
@@ -1164,7 +1159,7 @@
       if (!used.has(v)) { used.set(v, legend.length); legend.push(S.palette[v].code); }
       cells[i] = used.get(v);
     }
-    return { format: 'pindou-studio', version: 1, name: S.name, palette: S.paletteId, tray: S.tray, w: S.w, h: S.h, legend, cells };
+    return { format: 'pindou-studio', version: 1, name: S.name, palette: SAVED_PALETTE, tray: S.tray, w: S.w, h: S.h, legend, cells };
   }
   // Check a project file completely and turn it into a design state, without
   // changing anything. Throws a readable error for anything malformed.
@@ -1828,7 +1823,7 @@
   function becomeEditor(latest, quiet, source) {
     tab.state = 'editing'; tab.editing = true; tab.lastSync = source; tab.everEdited = true;
     // "My collection" may have changed in the other tab too
-    S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
+    S.owned = loadOwned();
     tab.gen = Math.max(store.get(GEN_KEY, 0) || 0, genOf(latest)) + 1;
     store.set(GEN_KEY, tab.gen);
     takeLatest(latest, quiet);
@@ -1912,12 +1907,14 @@
     if (saved) {
       try {
         const { gen, savedAt, ...project } = saved;
-        if (JSON.stringify(project) !== JSON.stringify(serialize())) {
+        // (the palette's name differs between versions: compare the design itself)
+        const same = (d) => JSON.stringify({ ...d, palette: null });
+        if (same(project) !== same(serialize())) {
           const { state, name } = parseProject(project);
           S.focus = null;
           if (quiet) { applyState({ ...state, name }); S.name = name; requestDraw(); }
           else replaceState({ ...state, name });
-          S.owned = new Set(store.get('pindou.owned.' + S.paletteId, S.palette.map((c) => c.code)));
+          S.owned = loadOwned();
           msg = "Editing in this tab now, with the other tab's latest work. Undo goes back to what this tab had.";
         }
       } catch { /* unreadable: keep what this tab has */ }
@@ -2742,12 +2739,6 @@
     viewport.addEventListener('focus', () => { if (cursorOn) { requestDraw(); announceCursor(); } });
 
     // palette panel
-    const ps = $('#paletteSelect');
-    for (const [id, p] of Object.entries(PALETTES)) {
-      const o = document.createElement('option'); o.value = id; o.textContent = p.name; ps.appendChild(o);
-    }
-    ps.value = S.paletteId;
-    ps.addEventListener('change', () => switchPalette(ps.value));
     const pv = $('#paletteView');
     for (const [id, v] of Object.entries(PALETTE_VIEWS)) {
       const o = document.createElement('option'); o.value = id; o.textContent = v.label; pv.appendChild(o);
@@ -2763,10 +2754,11 @@
     $('#editOwned').addEventListener('change', (e) => {
       S.editOwned = e.target.checked;
       renderSwatches();
-      $('#ownAll').hidden = $('#ownNone').hidden = $('#ownedHint').hidden = !S.editOwned;
+      $('#ownAll').hidden = $('#ownNone').hidden = $('#own221').hidden = $('#ownedHint').hidden = !S.editOwned;
     });
-    const saveOwned = () => store.set('pindou.owned.' + S.paletteId, [...S.owned]);
+    const saveOwned = () => store.set(OWNED_KEY, [...S.owned]);
     $('#ownAll').addEventListener('click', () => { S.owned = new Set(S.palette.map((c) => c.code)); saveOwned(); renderSwatches(); });
+    $('#own221').addEventListener('click', () => { S.owned = new Set(PALETTES[S.paletteId].colors.filter((c) => c.in221).map((c) => c.code)); saveOwned(); renderSwatches(); });
     $('#ownNone').addEventListener('click', () => { S.owned.clear(); saveOwned(); renderSwatches(); });
     $('#swatches').addEventListener('click', (e) => {
       const b = e.target.closest('.sw'); if (!b) return;
@@ -3027,7 +3019,6 @@
     if (saved) { try { loadProject(saved); restored = true; } catch { /* unreadable autosave: start fresh */ } }
     if (!restored) rebuildPixmap();
     $('#projectName').value = S.name;
-    $('#paletteSelect').value = S.paletteId;
     setTraySize(S.tray);
     const h7 = S.codeIndex.get('H7');
     selectColor(h7 != null ? h7 : 0);

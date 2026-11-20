@@ -22,8 +22,8 @@ Notes for anyone (human or AI assistant) changing this codebase.
 
 ## Things that are easy to break
 
-- **Whole-design changes go through `replaceState()`** (New/resize, Open, image import, palette switch) so they're one undo step that also restores palette and tray size. Don't mutate `S.cells`/`S.w`/`S.palette` directly for those.
-- **Cell values are indices into the current palette.** Anything that changes the palette must remap cells first (see `switchPalette()`).
+- **Whole-design changes go through `replaceState()`** (New/resize, Open, image import, "use the simpler version") so they're one undo step that also restores palette and tray size. Don't mutate `S.cells`/`S.w`/`S.palette` directly for those.
+- **Cell values are indices into the current palette.** There's one palette (`mard`; files from before 1.4 name `mard221`/`mard291` and open into it by code). "Check my colors" corrections recolor codes in place (`recolorPalette()`), keeping codes and their order, so cells stay valid; anything that reorders or removes palette entries would have to remap cells first.
 - **Links for other people use `shareBase()`,** which swaps a local address (localhost, 127.0.0.1, file:) for the public site. The address-bar switch is the exception: it keeps the tab's own address, since it's for that browser's own bookmarks. QR codes in exports need a link that's ready at once (Ctrl+P prints immediately), so `currentLink()` keeps one ready while the QR export toggle is on; anything that changes the design or its name must call `designChanged()` (`changed()` does).
 - **Project files and pattern links are untrusted input:** validate everything in `parseProject()` before changing any state. Links (`#pattern=…`, see "sharing a design as a link" in `js/app.js`) are unpacked by `unpackDesign()`, which caps how big they may unzip to, then go through `parseProject()` too. Changing what a link holds means a new `LINK_FORMAT` number, and old links must keep opening.
 - **Fill and Swap run on pointer-up,** so starting a pinch-zoom on a touchscreen doesn't trigger them.
