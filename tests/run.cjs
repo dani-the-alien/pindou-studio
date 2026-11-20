@@ -291,6 +291,26 @@ test('bead counts can be chosen from the keyboard', async (p) => {
   assert(n >= 1, 'count rows are not buttons');
 });
 
+test('sliced image conversion matches a straight-through one and keeps the page responsive', async (p) => {
+  await p.click('[data-action=import-image]');
+  const url = await p.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 500; const g = c.getContext('2d'); const d = g.createImageData(500, 500); let s = 3; for (let i = 0; i < d.data.length; i += 4) { s = (s * 1103515245 + 12345) & 0x7fffffff; d.data[i] = s & 255; d.data[i + 1] = (s >> 8) & 255; d.data[i + 2] = (s >> 16) & 255; d.data[i + 3] = 255; } g.putImageData(d, 0, 0); return c.toDataURL(); });
+  await p.setInputFiles('#imgFile', { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(url.split(',')[1], 'base64') });
+  await p.waitForFunction(() => !document.querySelector('#imgApply').disabled, null, { timeout: 60000 });
+  const r = await p.evaluate(async () => {
+    let last = performance.now(), worst = 0; const hb = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+    const el = document.querySelector('#imgW'); el.value = '300'; el.dispatchEvent(new Event('input'));
+    let sawProgress = false;
+    await new Promise((ok) => { const chk = () => { const t = document.querySelector('#imgStats').textContent; if (t.startsWith('Converting… ') && /\d%/.test(t)) sawProgress = true; return t.startsWith('300×') ? ok() : setTimeout(chk, 5); }; chk(); });
+    clearInterval(hb);
+    const sliced = __pindou.imgState.result.cells;
+    const whole = __pindou.convert({ w: 300, h: 300, max: 0, owned: false, dither: false, bg: false, clear: true }).cells;
+    return { worst: Math.round(worst), sawProgress, same: sliced.length === whole.length && sliced.every((v, i) => v === whole[i]) };
+  });
+  assert(r.same, 'sliced conversion differs from a straight-through one');
+  assert(r.sawProgress, 'no progress shown while converting');
+  assert(r.worst < 300, `page froze for ${r.worst} ms`);
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

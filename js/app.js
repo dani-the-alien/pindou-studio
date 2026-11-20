@@ -135,6 +135,7 @@
     S.owned = new Set(store.get('pindou.owned.' + id, S.palette.map((c) => c.code)));
     S.color = keep && S.codeIndex.has(keep) ? S.codeIndex.get(keep) : 0;
     imgState.result = null; // a conversion made with the old palette must never be applied
+    imgState.caches = new Map();
   }
   // Switch palettes as one undoable step. Colors the new palette lacks are replaced
   // by their nearest match, after asking, since that changes the design.
@@ -985,7 +986,7 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   // ---------- image → pattern ----------
-  const imgState = { img: null, aspect: 1, result: null, timer: null };
+  const imgState = { img: null, aspect: 1, result: null, timer: null, stepTimer: null, job: null, caches: new Map() };
 
   function openImageDialog() {
     const dlg = $('#imageDialog');
@@ -993,7 +994,7 @@
     tp.sel = null; tp.hover = null;
     dlg.showModal();
     // Always start from a fresh conversion with the current palette and settings.
-    if (imgState.img) runConvert();
+    if (imgState.img) startConvert();
     else { imgState.result = null; $('#imgApply').disabled = true; }
     drawTrayPicker();
   }
@@ -1080,7 +1081,7 @@
     clearTimeout(imgState.timer);
     drawTrayPicker();
     $('#imgStats').textContent = 'Converting…';
-    imgState.timer = setTimeout(runConvert, 150);
+    imgState.timer = setTimeout(startConvert, 150);
   }
   function downscale(img, w, h) {
     // step down by halves so large reductions average pixels instead of skipping them
@@ -1097,13 +1098,24 @@
     g.drawImage(src, 0, 0, w, h);
     return g.getImageData(0, 0, w, h).data;
   }
-  function convert(opts) {
+  // Image conversion runs as a generator so it can be sliced: the page stays
+  // responsive and a newer setting cancels an older run. Nearest-color matches are
+  // cached per palette/candidate set while the dialog is in use, so re-converting
+  // at another size mostly reuses earlier results. Matching is exact CIEDE2000.
+  let jobDeadline = Infinity;
+  const yieldDue = () => performance.now() > jobDeadline;
+  function matchCache(candidates) {
+    const sig = S.paletteId + ':' + candidates.join(',');
+    if (!imgState.caches.has(sig)) imgState.caches.set(sig, new Map());
+    return imgState.caches.get(sig);
+  }
+  function* convertJob(opts) {
     const { w, h } = opts;
     const data = downscale(imgState.img, w, h);
     let cand = S.palette.filter((c) => !c.transparent && (!opts.owned || S.owned.has(c.code))).map((c) => c.i);
     if (!cand.length) cand = allSolid();
-    const run = (candidates) => {
-      const cache = new Map();
+    function* run(candidates, pass) {
+      const cache = matchCache(candidates);
       const match = (r, g, b) => {
         const key = (r << 16) | (g << 8) | b;
         let v = cache.get(key);
@@ -1113,47 +1125,64 @@
       const out = new Int16Array(w * h);
       const buf = new Float32Array(w * h * 3);
       for (let i = 0; i < w * h; i++) { buf[i * 3] = data[i * 4]; buf[i * 3 + 1] = data[i * 4 + 1]; buf[i * 3 + 2] = data[i * 4 + 2]; }
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        if (opts.clear && data[i * 4 + 3] < 128) { out[i] = -1; continue; }
-        const r = clamp(Math.round(buf[i * 3]), 0, 255), g = clamp(Math.round(buf[i * 3 + 1]), 0, 255), b = clamp(Math.round(buf[i * 3 + 2]), 0, 255);
-        const v = match(r, g, b);
-        out[i] = v;
-        if (opts.dither) {
-          const p = S.palette[v].rgb;
-          const er = r - p[0], eg = g - p[1], eb = b - p[2];
-          const push = (xx, yy, f) => {
-            if (xx < 0 || xx >= w || yy >= h) return;
-            const j = yy * w + xx;
-            if (opts.clear && data[j * 4 + 3] < 128) return;
-            buf[j * 3] += er * f; buf[j * 3 + 1] += eg * f; buf[j * 3 + 2] += eb * f;
-          };
-          push(x + 1, y, 7 / 16); push(x - 1, y + 1, 3 / 16); push(x, y + 1, 5 / 16); push(x + 1, y + 1, 1 / 16);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if (opts.clear && data[i * 4 + 3] < 128) { out[i] = -1; continue; }
+          const r = clamp(Math.round(buf[i * 3]), 0, 255), g = clamp(Math.round(buf[i * 3 + 1]), 0, 255), b = clamp(Math.round(buf[i * 3 + 2]), 0, 255);
+          const v = match(r, g, b);
+          out[i] = v;
+          if (opts.dither) {
+            const p = S.palette[v].rgb;
+            const er = r - p[0], eg = g - p[1], eb = b - p[2];
+            const push = (xx, yy, f) => {
+              if (xx < 0 || xx >= w || yy >= h) return;
+              const j = yy * w + xx;
+              if (opts.clear && data[j * 4 + 3] < 128) return;
+              buf[j * 3] += er * f; buf[j * 3 + 1] += eg * f; buf[j * 3 + 2] += eb * f;
+            };
+            push(x + 1, y, 7 / 16); push(x - 1, y + 1, 3 / 16); push(x, y + 1, 5 / 16); push(x + 1, y + 1, 1 / 16);
+          }
         }
+        if (yieldDue()) yield { pass, progress: (y + 1) / h };
       }
       return out;
-    };
-    let out = run(cand);
+    }
+    let out = yield* run(cand, 1);
     if (opts.max > 0) {
       const counts = new Map();
       for (const v of out) if (v >= 0) counts.set(v, (counts.get(v) || 0) + 1);
-      if (counts.size > opts.max) out = run(reduceColors(counts, opts.max));
+      if (counts.size > opts.max) out = yield* run(reduceColors(counts, opts.max), 2);
     }
     if (opts.bg) removeBackground(out, w, h);
     return { w, h, cells: out };
+  }
+  // Run a conversion to the end without yielding (Apply, tests).
+  function convert(opts) {
+    const saved = jobDeadline; jobDeadline = Infinity;
+    try {
+      const job = convertJob(opts);
+      let r = job.next();
+      while (!r.done) r = job.next();
+      return r.value;
+    } finally { jobDeadline = saved; }
   }
   // Drop colors one at a time, always removing the one that is cheapest to lose
   // (bead count × distance to its nearest surviving color). Unlike "keep the most
   // common N", this keeps small but distinct details such as eyes and outlines.
   function reduceColors(counts, max) {
     const kept = new Map(counts);
+    // Pairwise distances once up front (at most 291² of them) instead of every round.
+    const ids = [...counts.keys()];
+    const dist = new Map(ids.map((a) => [a, new Map(ids.map((b) => [b, Color.deltaE2000(S.palette[a].lab, S.palette[b].lab)]))]));
     while (kept.size > max) {
       let worst = -1, into = -1, best = Infinity;
       for (const [a, na] of kept) {
         let nd = Infinity, ni = -1;
+        const da = dist.get(a);
         for (const b of kept.keys()) {
           if (a === b) continue;
-          const d = Color.deltaE2000(S.palette[a].lab, S.palette[b].lab);
+          const d = da.get(b);
           if (d < nd) { nd = d; ni = b; }
         }
         const cost = na * nd;
@@ -1186,30 +1215,67 @@
       if (y < h - 1) stack.push(i + w);
     }
   }
-  function runConvert() {
-    clearTimeout(imgState.timer); imgState.timer = null;
-    if (!imgState.img) return;
-    const w = clamp(+$('#imgW').value | 0, 1, MAX_DIM), h = clamp(+$('#imgH').value | 0, 1, MAX_DIM);
-    const res = convert({
-      w, h,
+  function convertOpts() {
+    return {
+      w: clamp(+$('#imgW').value | 0, 1, MAX_DIM), h: clamp(+$('#imgH').value | 0, 1, MAX_DIM),
       max: clamp(+$('#imgMax').value | 0, 0, 999),
       owned: $('#imgOwned').checked,
       dither: $('#imgDither').checked,
       bg: $('#imgBg').checked,
       clear: $('#imgClear').checked,
-    });
+    };
+  }
+  function cancelConvert() {
+    clearTimeout(imgState.timer); imgState.timer = null;
+    clearTimeout(imgState.stepTimer); imgState.stepTimer = null;
+    imgState.job = null;
+  }
+  // Is a newer conversion still waiting or running? Then the shown result is stale.
+  const convertPending = () => !!(imgState.timer || imgState.job);
+  // Convert in ~20 ms slices so the page stays responsive; a newer request cancels this one.
+  function startConvert() {
+    cancelConvert();
+    if (!imgState.img) return;
+    const job = convertJob(convertOpts());
+    imgState.job = job;
+    const step = () => {
+      if (imgState.job !== job) return;
+      jobDeadline = performance.now() + 20;
+      let r;
+      try { r = job.next(); } finally { jobDeadline = Infinity; }
+      if (r.done) { imgState.job = null; showConversion(r.value); return; }
+      const { pass, progress } = r.value;
+      $('#imgStats').textContent = `Converting… ${Math.round(progress * 100)}%${pass > 1 ? ' (reducing colors)' : ''}`;
+      imgState.stepTimer = setTimeout(step, 0);
+    };
+    step();
+  }
+  // Convert right now, to the end (used when the person applies the pattern).
+  function runConvert() {
+    cancelConvert();
+    if (!imgState.img) return;
+    showConversion(convert(convertOpts()));
+  }
+  function showConversion(res) {
+    const { w, h } = res;
     imgState.result = res;
-    // preview
+    // preview: one pixel per bead, scaled up without smoothing
+    const small = document.createElement('canvas'); small.width = w; small.height = h;
+    const sg = small.getContext('2d'); const img = sg.createImageData(w, h);
+    const used = new Set(); let beads = 0;
+    for (let i = 0; i < w * h; i++) {
+      const v = res.cells[i], o = i * 4;
+      let rgb;
+      if (v < 0) { const x = i % w, y = (i / w) | 0; rgb = ((x + y) & 1) ? [221, 221, 221] : [238, 238, 238]; }
+      else { rgb = S.palette[v].rgb; used.add(v); beads++; }
+      img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+    }
+    sg.putImageData(img, 0, 0);
     const pv = $('#imgPreview');
     const cs = Math.max(1, Math.floor(480 / Math.max(w, h)));
     pv.width = w * cs; pv.height = h * cs;
-    const g = pv.getContext('2d');
-    const used = new Set(); let beads = 0;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const v = res.cells[y * w + x];
-      if (v < 0) { g.fillStyle = ((x + y) & 1) ? '#ddd' : '#eee'; } else { g.fillStyle = S.palette[v].hex; used.add(v); beads++; }
-      g.fillRect(x * cs, y * cs, cs, cs);
-    }
+    const g = pv.getContext('2d'); g.imageSmoothingEnabled = false;
+    g.drawImage(small, 0, 0, pv.width, pv.height);
     const ta = Math.ceil(w / S.tray), td = Math.ceil(h / S.tray);
     $('#imgStats').textContent = `${w}×${h} · ${fmt(beads)} beads · ${used.size} colors · ${ta}×${td} tray${ta * td > 1 ? 's' : ''} of ${S.tray}`;
     $('#imgApply').disabled = false;
@@ -1440,7 +1506,7 @@
     });
     idlg.addEventListener('close', () => {
       if (idlg.returnValue !== 'ok') return;
-      if (imgState.timer) runConvert(); // a setting changed moments ago: use it, not the previous result
+      if (convertPending()) runConvert(); // a setting changed moments ago: use it, not the previous result
       if (!imgState.result) return;
       S.focus = null;
       replaceState({ paletteId: S.paletteId, tray: S.tray, ...imgState.result }, 'Pattern created. Undo brings back the previous design.');
