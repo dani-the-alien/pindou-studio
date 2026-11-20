@@ -744,6 +744,7 @@
   function setSheet(open) {
     const sb = $('#sidebar'), t = $('#sheetToggle');
     sb.classList.toggle('expanded', open);
+    $('.workspace').classList.toggle('sheet-open', open);
     requestAnimationFrame(updateBelowCanvas);
     t.setAttribute('aria-expanded', String(open));
     t.setAttribute('aria-label', open ? 'Hide colors and panels' : 'Show all colors and panels');
@@ -861,7 +862,7 @@
     for (const { c, n } of list) {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td><span class="swatch${c.transparent ? ' clear' : ''}" style="display:inline-block;vertical-align:middle;background:${c.hex}"></span></td><td><button type="button" class="code-btn" data-i="${c.i}" title="Use ${c.code}">${c.code}</button></td><td class="muted">${c.hex}</td><td class="n">${fmt(n)}</td><td class="n muted">${(n / total * 100).toFixed(1)}%</td>`;
-      tr.addEventListener('click', () => selectColor(c.i));
+      tr.addEventListener('click', () => { pickColor(c.i); if (sheetMode() && $('#sidebar').classList.contains('expanded')) setSheet(false); });
       body.appendChild(tr);
     }
     if (!list.length) body.innerHTML = '<tr><td class="muted">Nothing placed yet.</td></tr>';
@@ -1741,12 +1742,14 @@
 
     // ⋯ menu (compact layouts): closes after an action, on a click outside, or Escape
     $('#moreBtn').addEventListener('click', () => setMore(!$('#fileActions').classList.contains('open'), true));
+    // (Capture phase: runs before the action, so a dialog it opens returns focus to ⋯.)
     document.addEventListener('click', (e) => {
       if (!$('#fileActions').classList.contains('open') || e.target.closest('#moreBtn')) return;
       const b = e.target.closest('#fileActions button, #fileActions a');
       if (b && b.dataset.action === 'toggle-export') return; // opens its submenu inside the menu
-      if (b || !e.target.closest('#fileActions')) setMore(false, false);
-    });
+      if (b) setMore(false, $('#fileActions').contains(document.activeElement));
+      else if (!e.target.closest('#fileActions')) setMore(false, false);
+    }, true);
     $('#fileActions').addEventListener('focusout', (e) => {
       const to = e.relatedTarget;
       if (to && !$('#fileActions').contains(to) && to !== $('#moreBtn')) setMore(false, false);
@@ -1792,9 +1795,22 @@
       const sb = $('#sidebar'), a = document.activeElement;
       const f = !a || a === document.body ? lastFocused : a;
       if (sheetMode() && f && !sb.classList.contains('expanded') && sb.contains(f) && !$('.sheet-bar').contains(f)) $('#sheetToggle').focus();
+      else requestAnimationFrame(keepFocusVisible);
     });
+    // After a layout change, if the focused control is no longer shown, focus the one
+    // that does the same job in the new layout.
+    function keepFocusVisible() {
+      const a = document.activeElement;
+      const f = !a || a === document.body ? lastFocused : a;
+      if (!f || !document.contains(f) || f.getClientRects().length) return;
+      let to = null;
+      if (f.closest('#quickColors')) to = $('#swatches .sw[aria-pressed="true"]') || $('#swatches .sw');
+      else if (f === $('#sheetToggle')) to = $('.tabs [aria-selected="true"]');
+      else if (f === $('#moreBtn') || f.closest('#fileActions')) to = $('[data-action=save]');
+      if (to && to.getClientRects().length) to.focus();
+    }
     // Crossing into a layout without the ⋯ menu closes it, so it doesn't linger unseen.
-    matchMedia('(max-width: 759px), (max-height: 520px)').addEventListener('change', (e) => { if (!e.matches) setMore(false); });
+    matchMedia('(max-width: 799px), (max-height: 520px)').addEventListener('change', (e) => { if (!e.matches) setMore(false); requestAnimationFrame(keepFocusVisible); });
     // The folded-phone layout needs the top bar's height.
     new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', $('.topbar').offsetHeight + 'px')).observe($('.topbar'));
 

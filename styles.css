@@ -380,8 +380,8 @@ label.inline { min-width: 0; }
   .tool span { display: none; }
   .tool { min-height: 40px; padding: 4px 2px; }
 }
-/* phones in landscape: the toolbar becomes two columns so everything fits */
-@media (max-height: 520px) and (min-width: 600px) {
+/* phones in landscape and other low screens: the toolbar becomes two columns so everything fits */
+@media (max-height: 600px) and (min-width: 600px) {
   .sidebar { width: clamp(220px, 32vw, 300px); }
   .tabs button { padding: 6px; }
   .toolbar { display: grid; grid-template-columns: repeat(2, 42px); justify-content: center; align-content: start; gap: 4px; width: auto; padding: 6px; }
@@ -391,7 +391,7 @@ label.inline { min-width: 0; }
   .zoom { grid-column: 1 / -1; flex-direction: row; justify-content: center; margin: 0; gap: 4px; }
   .zoom button { width: 40px; }
 }
-@media (max-height: 520px) and (min-width: 600px) and (pointer: fine) {
+@media (max-height: 600px) and (min-width: 600px) and (pointer: fine) {
   .zoom button { width: 28px; padding: 4px 0; }
 }
 /* phones in landscape and folded foldables have no bottom sheet, but the quick row
@@ -414,7 +414,7 @@ label.inline { min-width: 0; }
   .sheet-toggle { width: 38px; height: 38px; }
   .tool { min-width: 42px; flex-basis: 42px; min-height: 38px; }
   .zoom button { width: 44px; }
-  .workspace:has(.sidebar.expanded) .stage { display: none; }
+  .workspace.sheet-open .stage { display: none; }
   .sidebar.expanded { flex: 1; height: auto; min-height: 0; }
   .sidebar.expanded .tabs button { padding: 6px; }
 }
@@ -434,6 +434,9 @@ label.inline { min-width: 0; }
   .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
   .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
   .sheet-toggle { display: none; }
+  .sidebar:not(.expanded) [data-panel=palette]:not([hidden]), .sidebar [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
+  /* messages go in the top half, above the hinge */
+  .toast { inset: auto auto calc(100% - env(viewport-segment-bottom 0 0) + 8px) 50%; }
   .toolbar {
     order: 2; display: flex; width: auto; flex: none; flex-direction: row; align-items: center; gap: 2px;
     border-right: 0; border-top: 1px solid var(--line); overflow-x: auto; overflow-y: hidden;
@@ -458,8 +461,10 @@ label.inline { min-width: 0; }
   }
   .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
   .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
-  .sheet-bar, .sheet-toggle { display: none; }
-  .toolbar { order: 0; width: 64px; flex-direction: column; border-top: 0; border-right: 1px solid var(--line); }
+  .sheet-toggle { display: none; }
+  .sidebar:not(.expanded) [data-panel=palette]:not([hidden]), .sidebar [data-panel=palette]:not([hidden]) { display: flex; flex-direction: column; }
+  .toolbar { order: 0; display: flex; width: 64px; flex-direction: column; align-items: center; overflow-y: auto; border-top: 0; border-right: 1px solid var(--line); }
+  .tool { width: 54px; }
   .stage { order: 1; }
 }
 
