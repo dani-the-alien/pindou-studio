@@ -1815,6 +1815,31 @@ test('short links: an open QR code stays open when the suggestion arrives', asyn
   await simpleReady(p); await p.waitForTimeout(200);
   eq(await p.evaluate(() => !document.querySelector('#linkQrBox').hidden), true, 'QR still shown');
 });
+test('keyboard: after New makes the design smaller, Enter paints inside it', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End'); // column 104
+  await newDesign(p); // 52×52; no click on the canvas
+  await p.focus('#viewport'); await keys(p, 'Enter');
+  eq(await cellV(p, 51, 0), await p.evaluate(() => __pindou.S.color), 'bead at the new right edge');
+  eq(await beads(p), 1, 'beads');
+  assert(/column 52, row 1/.test(await p.textContent('#canvasLive')), 'announced: ' + await p.textContent('#canvasLive'));
+});
+test('keyboard: Enter on the tray buttons over the canvas presses them, not the canvas', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.keyboard.press(']'); // first tray
+  await p.focus('#viewport'); await keys(p, 'ArrowRight');
+  await p.focus('[data-action=tray-next]'); await keys(p, 'Enter');
+  eq(await p.evaluate(() => __pindou.S.focus), { r: 0, c: 1 }, 'tray after Next tray');
+  eq(await beads(p), 0, 'beads');
+});
+test('keyboard: stepping to another tray brings the cursor into it', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.keyboard.press(']');
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'ArrowDown');
+  await keys(p, ']', 'Enter');
+  const tray = await p.evaluate(() => __pindou.S.tray);
+  eq(await cellV(p, tray, 1), await p.evaluate(() => __pindou.S.color), 'bead at the left edge of the second tray');
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

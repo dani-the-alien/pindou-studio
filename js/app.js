@@ -684,6 +684,13 @@
   function cursorBounds() {
     return S.focus ? trayRect(S.focus.r, S.focus.c) : { x: 0, y: 0, w: S.w, h: S.h };
   }
+  // Keep the cursor inside the design (or the focused tray): the size or the tray can
+  // change under it (New, Open, Undo of a resize, [ and ]).
+  function clampCursor() {
+    if (!S.cursor) return;
+    const b = cursorBounds();
+    S.cursor = { x: clamp(S.cursor.x, b.x, b.x + b.w - 1), y: clamp(S.cursor.y, b.y, b.y + b.h - 1) };
+  }
   function placeCursor(x, y) {
     const b = cursorBounds();
     S.cursor = { x: clamp(x, b.x, b.x + b.w - 1), y: clamp(y, b.y, b.y + b.h - 1) };
@@ -698,6 +705,7 @@
     if (py < m) S.view.oy += m - py; else if (py + s > vh - m) S.view.oy -= py + s - (vh - m);
   }
   function announceCursor(done) {
+    clampCursor();
     const c = S.cursor; if (!c) return;
     const v = S.cells[c.y * S.w + c.x];
     const bead = v >= 0 ? S.palette[v].code : 'empty';
@@ -706,17 +714,20 @@
   }
   function applyAtCursor(erase) {
     if (!tab.editing || !S.cursor) return;
+    clampCursor();
     const cell = { x: S.cursor.x, y: S.cursor.y, i: S.cursor.y * S.w + S.cursor.x };
     if (S.focus && !inFocus(cell)) return;
     if (!erase && S.tool === 'pan') { $('#canvasLive').textContent = 'The pan tool is selected: press P for the pencil to draw.'; return; }
     if (!erase && S.tool === 'picker') {
       const v = S.cells[cell.i];
       if (v >= 0) { selectColor(v); setTool('pencil'); announceCursor(`Picked ${S.palette[v].code}.`); }
+      else announceCursor('Nothing to pick here.');
       return;
     }
     if (!erase && (S.tool === 'fill' || S.tool === 'replace')) {
+      const steps = S.undo.length;
       runTapTool({ tool: S.tool, cell });
-      announceCursor(S.tool === 'fill' ? 'Filled.' : 'Swapped.');
+      announceCursor(S.undo.length === steps ? 'Nothing changed.' : S.tool === 'fill' ? 'Filled.' : 'Swapped.');
       return;
     }
     const v = erase || S.tool === 'eraser' ? -1 : S.color;
@@ -724,7 +735,9 @@
     announceCursor(v < 0 ? 'Erased.' : 'Placed.');
   }
   function onCanvasKey(e) {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // only keys meant for the canvas itself, not for the tray buttons shown over it
+    if (e.target !== viewport || e.ctrlKey || e.metaKey || e.altKey) return;
+    clampCursor();
     const step = e.shiftKey ? 10 : 1;
     const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     const first = !cursorOn || !S.cursor;
@@ -985,6 +998,7 @@
     if (r == null) S.focus = null;
     else S.focus = { r, c };
     fitView();
+    if (S.cursor) { clampCursor(); if (cursorShown()) announceCursor(); }
     refreshPanels();
     if (fromPanel && sheetMode() && $('#sidebar').classList.contains('expanded')) {
       const hadFocus = $('#trayGrid').contains(document.activeElement);
