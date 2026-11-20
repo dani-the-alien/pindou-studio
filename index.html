@@ -6,8 +6,8 @@
   <title>Pindou Studio</title>
   <!-- Version: keep in sync with VERSION in js/app.js (tools/bump-version.sh does both). The ?v= on each
        script/style URL makes browsers fetch fresh files after an update instead of reusing cached ones. -->
-  <meta name="pindou-version" content="1.1.0">
-  <link rel="stylesheet" href="styles.css?v=1.1.0">
+  <meta name="pindou-version" content="1.2.0">
+  <link rel="stylesheet" href="styles.css?v=1.2.0">
 </head>
 <body>
   <header class="topbar">
@@ -22,6 +22,7 @@
       <button data-action="import-image" title="Convert an image to a pattern">Image…</button>
       <button data-action="open" title="Open a saved .pindou.json project">Open</button>
       <button data-action="save" title="Download this project as .pindou.json">Save</button>
+      <button data-action="share-link" title="Share this design as a link">Share</button>
       <div class="menu">
         <button data-action="toggle-export" aria-haspopup="true" aria-expanded="false">Export ▾</button>
         <div class="menu-pop" id="exportMenu" hidden>
@@ -171,6 +172,39 @@
     </div>
   </dialog>
 
+  <!-- Share as a link -->
+  <dialog id="linkDialog" aria-labelledby="linkTitle">
+    <form method="dialog" class="dlg">
+      <h2 id="linkTitle">Share as a link</h2>
+      <p>Anyone who opens this link gets their own copy of this design in Pindou Studio. The design is inside the link itself; Pindou Studio doesn't upload it anywhere.</p>
+      <label>Link <input id="linkText" readonly spellcheck="false" autocomplete="off"></label>
+      <p class="hint" id="linkHint"></p>
+      <div id="linkLiveRow" class="dlg-group">
+      <label class="switch"><input type="checkbox" role="switch" id="linkLive" aria-describedby="linkLiveHint"> Keep this design's link in the address bar</label>
+      <p class="hint" id="linkLiveHint">To bookmark the design: turn this on, then bookmark the page (Ctrl+D, ⌘D, or the ☆ in the address bar or browser menu). While it's on, the address follows your edits in this tab, so each bookmark saves the design as it was when you made it.</p>
+      </div>
+      <div class="dlg-actions">
+        <button type="button" class="primary" id="linkCopy"><span id="linkCopyLabel">Copy link</span></button>
+        <button type="button" id="linkShare" hidden>Share…</button>
+        <button value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Opening a link while a design is open -->
+  <dialog id="linkOpenDialog" aria-labelledby="linkOpenTitle" aria-describedby="linkOpenText linkOpenHint">
+    <form method="dialog" class="dlg">
+      <h2 id="linkOpenTitle">Open the shared pattern?</h2>
+      <p id="linkOpenText"></p>
+      <p class="hint" id="linkOpenHint">It replaces the design you have open here. Undo brings yours back while this tab stays open; to keep a copy for later, save yours first.</p>
+      <div class="dlg-actions">
+        <button value="open" class="primary">Open it</button>
+        <button value="save-open">Save mine, then open</button>
+        <button value="keep" autofocus>Keep mine</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- New project -->
   <dialog id="newDialog">
     <form method="dialog" class="dlg">
@@ -243,8 +277,8 @@
   <div id="printRoot" class="print-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><span id="toastText"></span><button id="toastClose" class="toast-close" type="button" hidden>Dismiss</button></div>
 
-  <script src="js/palettes.js?v=1.1.0"></script>
-  <script src="js/color.js?v=1.1.0"></script>
-  <script src="js/app.js?v=1.1.0"></script>
+  <script src="js/palettes.js?v=1.2.0"></script>
+  <script src="js/color.js?v=1.2.0"></script>
+  <script src="js/app.js?v=1.2.0"></script>
 </body>
 </html>

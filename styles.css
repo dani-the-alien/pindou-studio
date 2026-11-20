@@ -212,6 +212,23 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dlg h2 { margin: 0 0 4px; font-size: 18px; }
 .dlg label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .dlg label.check { flex-direction: row; }
+.dlg-group { display: flex; flex-direction: column; gap: 10px; }
+.dlg-group[hidden] { display: none; }
+/* An on/off switch (a checkbox with role="switch") */
+.dlg label.switch { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+.switch input {
+  appearance: none; flex: none; margin: 0; width: 38px; height: 22px; border-radius: 11px;
+  background: var(--muted); position: relative; cursor: pointer; transition: background .15s;
+}
+.switch input::before {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); transition: transform .15s;
+}
+.switch input:checked { background: var(--accent); }
+.switch input:checked::before { transform: translateX(16px); }
+.switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch input, .switch input::before { transition: none; } }
+@media (forced-colors: active) { .switch input { appearance: auto; } .switch input::before { display: none; } }
 .field-row { display: flex; gap: 12px; flex-wrap: wrap; }
 /* The primary button comes first in the markup (so Enter means OK) but shows on the right. */
 .dlg-actions { display: flex; flex-direction: row-reverse; justify-content: flex-start; gap: 8px; margin-top: 6px; }
@@ -284,6 +301,7 @@ label.inline { min-width: 0; }
 }
 
 @media (max-width: 1099.98px) {
+  .project-name { width: 9em; } /* room for the file buttons down to 800px (the ⋯ layouts set their own) */
   .sidebar { width: clamp(240px, 30vw, 310px); }
   .toolbar { width: 64px; }
   .tool { width: 54px; }
