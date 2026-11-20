@@ -16,6 +16,8 @@
       <input id="projectName" class="project-name" value="Untitled" aria-label="Project name" title="Project name: click to rename" spellcheck="false">
     </div>
     <nav class="top-actions">
+      <!-- On wide screens these sit in the bar; on compact layouts they fold into the ⋯ menu. -->
+      <div class="file-actions" id="fileActions">
       <button data-action="new" title="New project">New</button>
       <button data-action="import-image" title="Convert an image to a pattern">Image…</button>
       <button data-action="open" title="Open a saved .pindou.json project">Open</button>
@@ -28,11 +30,14 @@
           <button data-action="print-trays">Print per-tray sheets</button>
         </div>
       </div>
-      <span class="sep"></span>
+      <span class="sep repo-sep"></span>
+      <a class="repo-link" href="https://github.com/dani-the-alien/pindou-studio" target="_blank" rel="noopener" aria-label="Pindou Studio on GitHub (opens in a new tab)" title="Source code, issues and updates (opens in a new tab)">GitHub ↗</a>
+      <div class="menu-version" id="menuVersion"></div>
+      </div>
+      <span class="sep edit-sep"></span>
       <button data-action="undo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
       <button data-action="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
-      <span class="sep"></span>
-      <a class="repo-link" href="https://github.com/dani-the-alien/pindou-studio" target="_blank" rel="noopener" aria-label="Pindou Studio on GitHub (opens in a new tab)" title="Source code, issues and updates (opens in a new tab)">GitHub ↗</a>
+      <button class="more-btn" id="moreBtn" aria-expanded="false" aria-controls="fileActions" aria-label="More: new, image, open, save, export" title="More">⋯</button>
     </nav>
   </header>
 
@@ -90,7 +95,13 @@
       <div class="status" id="status">&nbsp;</div>
     </section>
 
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
+      <!-- Phone layouts: the sidebar is a bottom sheet. This row stays visible when it's
+           collapsed, so colors can be changed without opening it. -->
+      <div class="sheet-head">
+        <div id="quickColors" class="quick" role="group" aria-label="Quick colors: current, in this design, and recently used"></div>
+        <button id="sheetToggle" class="sheet-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Show all colors and panels" title="All colors and panels">▴</button>
+      </div>
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="palette" aria-selected="true">Palette</button>
         <button role="tab" data-tab="counts" aria-selected="false">Counts</button>
