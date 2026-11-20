@@ -558,62 +558,97 @@ const SCREENS = {
   'flip phone cover screen': { width: 400, height: 330 },
   'small phone': { width: 360, height: 640 },
   'big foldable, open': { width: 790, height: 720 },
+  'big foldable, open, portrait': { width: 720, height: 790 },
   'phone in landscape': { width: 860, height: 360 },
+  'small phone in landscape': { width: 740, height: 360 },
   'tablet portrait': { width: 820, height: 1060 },
   'tablet landscape': { width: 1180, height: 760 },
 };
 const touch = (vp) => ({ viewport: vp, isMobile: true, hasTouch: true });
-async function layoutFacts(p) {
-  return p.evaluate(() => {
-    const vis = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight + 1 && r.right <= innerWidth + 1; };
-    const v = document.querySelector('#viewport').getBoundingClientRect();
-    const de = document.documentElement;
-    return {
-      scrolls: de.scrollWidth > innerWidth || de.scrollHeight > innerHeight,
-      canvasShare: (v.width * v.height) / (innerWidth * innerHeight),
-      canvasMin: Math.min(v.width, v.height),
-      quick: vis(document.querySelector('#quickColors .sw')),
-      palette: vis(document.querySelector('#swatches .sw')),
-      tools: vis(document.querySelector('.toolbar')),
-      undo: vis(document.querySelector('[data-action=undo]')),
-      files: vis(document.querySelector('[data-action=save]')) || vis(document.querySelector('#moreBtn')),
-    };
-  });
+// Can this element actually be tapped: on screen, not clipped by a scrolling parent,
+// not covered by something else?
+const tappable = (p, sel) => p.evaluate((sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
+  const hit = document.elementFromPoint(x, y);
+  return !!hit && (hit === el || el.contains(hit));
+}, sel);
+async function openSheetIfPhone(p) {
+  if (await tappable(p, '#sheetToggle') && (await p.getAttribute('#sheetToggle', 'aria-expanded')) === 'false') { await p.tap('#sheetToggle'); await p.waitForTimeout(150); }
 }
 for (const [name, vp] of Object.entries(SCREENS)) {
-  test(`layout (${name} ${vp.width}×${vp.height}): no page scroll, big canvas, colors and tools in reach`, async (p) => {
-    const f = await layoutFacts(p);
+  test(`layout (${name} ${vp.width}×${vp.height}): no page scroll, big canvas, everything reachable`, async (p) => {
+    const f = await p.evaluate(() => {
+      const v = document.querySelector('#viewport').getBoundingClientRect(), de = document.documentElement;
+      return { scrolls: de.scrollWidth > innerWidth || de.scrollHeight > innerHeight, share: (v.width * v.height) / (innerWidth * innerHeight), min: Math.min(v.width, v.height) };
+    });
     assert(!f.scrolls, 'the page scrolls');
-    assert(f.canvasShare > 0.4, `canvas only ${Math.round(f.canvasShare * 100)}% of the screen`);
-    assert(f.canvasMin >= 170, `canvas only ${f.canvasMin}px on its short side`);
-    assert(f.quick || f.palette, 'no color can be picked without scrolling');
-    assert(f.tools && f.undo && f.files, `tools ${f.tools}, undo ${f.undo}, file actions ${f.files}`);
+    assert(f.share > 0.4, `canvas only ${Math.round(f.share * 100)}% of the screen`);
+    assert(f.min >= 170, `canvas only ${Math.round(f.min)}px on its short side`);
+    const tools = await p.evaluate(() => [...document.querySelectorAll('.tool')].map((b) => b.dataset.tool));
+    for (const t of tools) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t} can't be tapped`);
+    for (const sel of ['[data-action=zoom-fit]', '[data-action=undo]', '[data-action=redo]']) assert(await tappable(p, sel), `${sel} can't be tapped`);
+    // file actions: in the bar, or inside the ⋯ menu
+    if (!(await tappable(p, '[data-action=save]'))) {
+      assert(await tappable(p, '#moreBtn'), 'neither Save nor ⋯ can be tapped');
+      await p.tap('#moreBtn');
+      for (const a of ['new', 'import-image', 'open', 'save', 'toggle-export']) assert(await tappable(p, `[data-action=${a}]`), `${a} not in the open ⋯ menu`);
+      await p.keyboard.press('Escape');
+    }
+    // colors: the quick row, and the full palette (opening the sheet on phones)
+    const quick = await tappable(p, '#quickColors [data-q=current]');
+    await openSheetIfPhone(p);
+    assert(await tappable(p, '#swatches .sw'), 'the full palette shows no colors');
+    assert(quick || !(await p.evaluate(() => matchMedia('(max-width: 599px)').matches)), 'no quick colors on a phone');
     eq(p.errors, [], 'page errors');
   }, touch(vp));
 }
-test('phone: quick colors switch color; the sheet opens the full palette and closes after a pick', async (p) => {
+test('phone: quick colors switch color and tool; recent picks come first; the sheet closes after a pick', async (p) => {
   await p.click('[data-tool=fill]'); await p.tap('#viewport');
   await p.waitForTimeout(300);
-  // the color in the design shows in the quick row
   const h7 = await p.evaluate(() => __pindou.S.codeIndex.get('H7'));
-  assert(await p.locator(`#quickColors [data-q="${h7}"]`).isVisible(), 'design color not in the quick row');
+  assert(await tappable(p, `#quickColors [data-q="${h7}"]`), 'design color not in the quick row');
   eq(await p.evaluate(() => document.querySelector('#swatches').getBoundingClientRect().height), 0, 'palette visible while the sheet is closed');
   await p.tap('#sheetToggle');
   eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'true', 'sheet toggle state');
+  eq(await p.getAttribute('#quickColors [data-q=current]', 'aria-expanded'), 'true', 'current color button state');
   const pick = p.locator('#swatches .sw >> nth=5');
   const code = await pick.textContent();
   await pick.tap();
   eq(await p.evaluate(() => __pindou.S.palette[__pindou.S.color].code), code, 'picked color');
   eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'false', 'sheet closes after a pick');
-  // the pick is now in the quick row as a recent color; tapping H7 there switches back
+  eq(await p.evaluate(() => document.activeElement.dataset.q), 'current', 'focus stays in the quick row');
+  // eraser, then a quick color: back to drawing
+  await p.tap('[data-tool=eraser]');
   await p.tap(`#quickColors [data-q="${h7}"]`);
-  eq(await p.evaluate(() => __pindou.S.palette[__pindou.S.color].code), 'H7', 'quick row switches color');
-  assert(await p.locator('#quickColors [aria-label$="recently used"]').count() >= 1, 'recent color missing');
-  // tapping the current color opens the sheet
-  await p.tap('#quickColors [data-q=current]');
-  eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'true', 'current color opens the sheet');
+  eq(await p.evaluate(() => [__pindou.S.palette[__pindou.S.color].code, __pindou.S.tool]), ['H7', 'pencil'], 'color and tool after a quick pick');
+  // the earlier pick is now right after the current color
+  eq(await p.evaluate(() => document.querySelectorAll('#quickColors .sw')[1].textContent), code, 'recent pick position');
+  // one Tab stop; arrows move along the row
+  eq(await p.evaluate(() => [...document.querySelectorAll('#quickColors button')].filter((b) => b.tabIndex === 0).length), 1, 'tab stops in the quick row');
+  await p.focus('#quickColors [data-q=current]'); await p.keyboard.press('ArrowRight');
+  eq(await p.evaluate(() => document.activeElement.textContent), code, 'ArrowRight');
+  // Escape closes the sheet
+  await p.tap('#sheetToggle'); await p.keyboard.press('Escape');
+  eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'false', 'Escape closes the sheet');
 }, touch(SCREENS['foldable cover / tall phone']));
-test('compact: the ⋯ menu holds the file actions, closes after one, and on Escape', async (p) => {
+test('phone: a message does not cover undo or ⋯', async (p) => {
+  await p.evaluate(() => { const s = document.querySelector('#paletteSelect'); s.value = 'mard291'; s.dispatchEvent(new Event('change')); });
+  await p.waitForFunction(() => !document.querySelector('#toast').hidden);
+  const overlap = await p.evaluate(() => {
+    const t = document.querySelector('#toast').getBoundingClientRect();
+    return ['[data-action=undo]', '#moreBtn', '#quickColors [data-q=current]', '.tool[data-tool=pencil]'].filter((sel) => {
+      const r = document.querySelector(sel).getBoundingClientRect();
+      return !(r.right <= t.left || r.left >= t.right || r.bottom <= t.top || r.top >= t.bottom);
+    });
+  });
+  eq(overlap, [], 'controls under the message');
+}, touch(SCREENS['foldable cover / tall phone']));
+test('compact: the ⋯ menu holds the file actions, closes after one, on Escape, and when the layout changes', async (p) => {
   assert(!(await p.locator('[data-action=new]').isVisible()), 'file actions shown outside the menu');
   await p.tap('#moreBtn');
   eq(await p.getAttribute('#moreBtn', 'aria-expanded'), 'true', 'menu state');
@@ -626,9 +661,15 @@ test('compact: the ⋯ menu holds the file actions, closes after one, and on Esc
   await p.keyboard.press('Escape');
   eq(await p.getAttribute('#moreBtn', 'aria-expanded'), 'false', 'Escape closes the menu');
   eq(await p.evaluate(() => document.activeElement.id), 'moreBtn', 'focus back on ⋯');
-  // Export opens its submenu inside the menu instead of closing it
   await p.tap('#moreBtn'); await p.tap('[data-action=toggle-export]');
   assert(await p.locator('[data-action=export-png]').isVisible(), 'export choices not shown');
+  // a tap on the canvas only closes the menu, it doesn't draw
+  { const v = await p.locator('#viewport').boundingBox(); await p.touchscreen.tap(v.x + 30, v.y + v.height / 2); } // clear of the open menu
+  eq([await p.getAttribute('#moreBtn', 'aria-expanded'), await beads(p)], ['false', 0], 'canvas tap with the menu open');
+  // open, then rotate to a layout without ⋯: the menu closes
+  await p.tap('#moreBtn');
+  await p.setViewportSize({ width: 1060, height: 820 }); await p.waitForTimeout(150);
+  eq(await p.evaluate(() => document.querySelector('#fileActions').classList.contains('open')), false, 'menu left open after rotating');
 }, touch(SCREENS['foldable cover / tall phone']));
 test('short screens: view settings move into the ⋯ menu and still work', async (p) => {
   eq(await p.evaluate(() => !!document.querySelector('#fileActions .stage-bar')), true, 'settings in the menu');
@@ -637,30 +678,47 @@ test('short screens: view settings move into the ⋯ menu and still work', async
   await p.tap('#showCodes');
   eq(await p.evaluate(() => __pindou.S.showCodes), !before, 'Codes toggled');
   eq(await p.getAttribute('#moreBtn', 'aria-expanded'), 'true', 'menu stays open while changing settings');
-  // back to a tall screen: the settings return above the canvas
   await p.setViewportSize({ width: 412, height: 780 }); await p.waitForTimeout(150);
   eq(await p.evaluate(() => document.querySelector('.stage-bar').parentElement.className), 'stage', 'settings back in place');
+  eq(await p.evaluate(() => document.querySelector('#fileActions').classList.contains('open')), false, 'menu closed when its settings moved out');
 }, touch(SCREENS['flip phone cover screen']));
-test('tall tablet: palette docked under the canvas', async (p) => {
+test('flip phone cover screen: the open sheet shows colors straight away', async (p) => {
+  await p.tap('#sheetToggle'); await p.waitForTimeout(150);
+  assert(await tappable(p, '#swatches .sw'), 'no swatch on screen');
+  const pick = p.locator('#swatches .sw >> nth=3'); const code = await pick.textContent(); await pick.tap();
+  eq(await p.evaluate(() => __pindou.S.palette[__pindou.S.color].code), code, 'picked');
+  assert(await p.evaluate(() => document.querySelector('#viewport').getBoundingClientRect().height > 150), 'canvas back after the pick');
+}, touch(SCREENS['flip phone cover screen']));
+test('tall tablet: palette docked under the canvas, full top bar', async (p) => {
   const r = await p.evaluate(() => { const v = document.querySelector('#viewport').getBoundingClientRect(), s = document.querySelector('.sidebar').getBoundingClientRect(); return [s.top >= v.bottom - 1, s.width > innerWidth * 0.8]; });
   eq(r, [true, true], 'sidebar below and full width');
+  assert(await tappable(p, '[data-action=save]'), 'Save not in the bar');
 }, touch(SCREENS['tablet portrait']));
 async function fold(p, vp, orientation, offset, maskLength) {
   const cdp = await p.ctx.newCDPSession(p);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: true, displayFeature: { orientation, offset, maskLength }, devicePosture: { type: 'folded' } });
   await p.waitForTimeout(300);
 }
-test('flip phone half-open: canvas above the hinge, controls below it', async (p) => {
-  await fold(p, { width: 412, height: 820 }, 'horizontal', 400, 20);
-  const r = await p.evaluate(() => {
-    const seg = window.viewport.segments; const st = document.querySelector('.stage').getBoundingClientRect(), sb = document.querySelector('.sidebar').getBoundingClientRect();
-    return { segs: seg.length, stageEnd: Math.round(st.bottom), sideTop: Math.round(sb.top), top0: seg[0].height, top1: seg[1].y, swatches: document.querySelector('#swatches').getBoundingClientRect().height > 0 };
-  });
-  eq(r.segs, 2, 'segments');
-  assert(r.stageEnd <= r.top0 + 1, `canvas runs past the hinge (${r.stageEnd} > ${r.top0})`);
-  assert(r.sideTop >= r.top1 - 1, `controls start above the hinge (${r.sideTop} < ${r.top1})`);
-  assert(r.swatches, 'full palette not shown below the hinge');
-}, touch({ width: 412, height: 820 }));
+// Hinge across the screen (one segment above the other): flip phone half-open, a big
+// foldable or tablet used like a little laptop.
+for (const [name, vp, at] of [['flip phone', { width: 412, height: 820 }, 400], ['big foldable', { width: 720, height: 790 }, 385], ['tall tablet', { width: 820, height: 1060 }, 520]]) {
+  test(`${name} half-open, hinge across: canvas above, controls below, all reachable`, async (p) => {
+    await fold(p, vp, 'horizontal', at, 20);
+    const r = await p.evaluate(() => {
+      const seg = window.viewport.segments; const st = document.querySelector('.stage').getBoundingClientRect(), sb = document.querySelector('.sidebar').getBoundingClientRect();
+      const de = document.documentElement;
+      return { segs: seg.length, stageEnd: Math.round(st.bottom), sideTop: Math.round(sb.top), sideH: Math.round(sb.height), top0: seg[0].height, top1: seg[1].y, scrolls: de.scrollHeight > innerHeight || de.scrollWidth > innerWidth };
+    });
+    eq(r.segs, 2, 'segments');
+    assert(!r.scrolls, 'the page scrolls');
+    assert(r.stageEnd <= r.top0 + 1, `canvas runs past the hinge (${r.stageEnd} > ${r.top0})`);
+    assert(r.sideTop >= r.top1 - 1, `controls start above the hinge (${r.sideTop} < ${r.top1})`);
+    assert(r.sideH >= 120, `panels only ${r.sideH}px tall`);
+    assert(await tappable(p, '#swatches .sw'), 'no swatch on screen');
+    for (const t of ['pencil', 'eraser', 'fill', 'picker', 'replace', 'pan']) assert(await tappable(p, `.tool[data-tool=${t}]`), `tool ${t}`);
+    assert(await tappable(p, '[data-action=zoom-fit]'), 'Fit');
+  }, touch(vp));
+}
 test('book-style foldable half-open: canvas on the left half, panels on the right', async (p) => {
   await fold(p, { width: 790, height: 720 }, 'vertical', 386, 18);
   const r = await p.evaluate(() => {
@@ -670,17 +728,45 @@ test('book-style foldable half-open: canvas on the left half, panels on the righ
   eq(r.segs, 2, 'segments');
   assert(r.stageEnd <= r.w0 + 1, `canvas runs past the hinge (${r.stageEnd} > ${r.w0})`);
   assert(r.sideLeft >= r.x1 - 1 && r.sideRight <= 791, `panels not on the right half (${r.sideLeft}–${r.sideRight})`);
+  assert(await tappable(p, '#swatches .sw'), 'no swatch on screen');
 }, touch({ width: 790, height: 720 }));
+const inView = (p) => p.evaluate(() => {
+  const S = __pindou.S, v = S.view, r = document.querySelector('#viewport').getBoundingClientRect();
+  const t = S.focus ? { x: S.focus.c * S.tray, y: S.focus.r * S.tray, w: S.tray, h: S.tray } : { x: 0, y: 0, w: S.w, h: S.h };
+  const x0 = v.ox + t.x * v.scale, y0 = v.oy + t.y * v.scale;
+  return { fits: x0 >= -1 && y0 >= -1 && x0 + t.w * v.scale <= r.width + 1 && y0 + t.h * v.scale <= r.height + 1, fill: Math.max(t.w * v.scale / r.width, t.h * v.scale / r.height) };
+});
 test('a design that fit stays fitted when the screen changes size; a zoomed one keeps its zoom', async (p) => {
-  const inView = () => p.evaluate(() => { const v = __pindou.S.view, r = document.querySelector('#viewport').getBoundingClientRect(); return v.ox >= -1 && v.oy >= -1 && v.ox + __pindou.S.w * v.scale <= r.width + 1 && v.oy + __pindou.S.h * v.scale <= r.height + 1; });
-  assert(await inView(), 'not fitted at start');
+  assert((await inView(p)).fits, 'not fitted at start');
   await p.setViewportSize({ width: 412, height: 400 }); await p.waitForTimeout(200);
-  assert(await inView(), 'design spills off after the screen shrinks');
-  await p.keyboard.press('Equal'); await p.keyboard.press('Equal'); // the + buttons are hidden on phones (pinch instead)
+  assert((await inView(p)).fits, 'design spills off after the screen shrinks');
+  await p.keyboard.press('Equal'); await p.keyboard.press('Equal');
   const s1 = await p.evaluate(() => __pindou.S.view.scale);
   await p.setViewportSize({ width: 412, height: 780 }); await p.waitForTimeout(200);
   eq(await p.evaluate(() => __pindou.S.view.scale), s1, 'zoom kept');
 }, { viewport: { width: 412, height: 780 } });
+test('printing does not lose the view', async (p) => {
+  const before = await p.evaluate(() => ({ ...__pindou.S.view }));
+  await p.emulateMedia({ media: 'print' }); await p.waitForTimeout(200);
+  await p.emulateMedia({ media: 'screen' }); await p.waitForTimeout(200);
+  eq(await p.evaluate(() => ({ ...__pindou.S.view })), before, 'fitted view after print');
+  await p.click('[data-action=zoom-in]'); await p.click('[data-action=zoom-in]');
+  const zoomed = await p.evaluate(() => ({ ...__pindou.S.view }));
+  await p.emulateMedia({ media: 'print' }); await p.waitForTimeout(200);
+  await p.emulateMedia({ media: 'screen' }); await p.waitForTimeout(200);
+  eq(await p.evaluate(() => ({ ...__pindou.S.view })), zoomed, 'zoomed view after print');
+});
+test('phone: a tray picked from the sheet fills the screen once the sheet closes', async (p) => {
+  await p.tap('#moreBtn'); await p.tap('[data-action=new]');
+  await p.fill('#newAcross', '2'); await p.dispatchEvent('#newAcross', 'input');
+  await p.fill('#newDown', '2'); await p.dispatchEvent('#newDown', 'input');
+  await p.tap('#newDialog button[value=ok]'); await p.waitForTimeout(150);
+  await p.tap('#sheetToggle'); await p.tap('[role=tab][data-tab=trays]'); await p.waitForTimeout(150);
+  await p.tap('#trayGrid [data-tray] >> nth=0'); await p.waitForTimeout(300);
+  eq(await p.getAttribute('#sheetToggle', 'aria-expanded'), 'false', 'sheet closed');
+  const v = await inView(p);
+  assert(v.fits && v.fill > 0.8, `tray not fitted to the full canvas (fill ${v.fill.toFixed(2)})`);
+}, touch(SCREENS['foldable cover / tall phone']));
 test('Space still pans after clicking a button with the mouse', async (p) => {
   await p.click('#swatches .sw >> nth=3'); // focus stays on the swatch after a mouse click
   const [x, y] = await cellPoint(p, 10, 10);
@@ -750,7 +836,7 @@ test('undoing Open brings back the previous project name', async (p) => {
   eq([await p.inputValue('#projectName'), await p.evaluate(() => __pindou.S.name)], ['Frog', 'Frog'], 'name after undo');
 });
 test('switching palettes keeps the zoom', async (p) => {
-  await p.keyboard.press('Equal'); await p.keyboard.press('Equal'); // the + buttons are hidden on phones (pinch instead)
+  await p.click('[data-action=zoom-in]'); await p.click('[data-action=zoom-in]');
   const z = await p.evaluate(() => __pindou.S.view.scale);
   await p.selectOption('#paletteSelect', 'mard291'); await p.waitForTimeout(100);
   eq(await p.evaluate(() => __pindou.S.view.scale), z, 'zoom after switch');
