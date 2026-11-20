@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.2'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.3'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -633,16 +633,35 @@
   viewport.addEventListener('pointerup', endPointer);
   viewport.addEventListener('pointercancel', (e) => { if (gesture && gesture.kind === 'draw') cancelStroke(); endPointer(e); });
   viewport.addEventListener('pointerleave', () => { if (!gesture) setHover(null); });
+  // Mouse wheel (zoom) or touchpad two-finger scroll (pan)? Browsers don't say, so: a
+  // burst of wheel events (no gap over 250 ms) is judged by its first event and keeps that
+  // for the whole burst. Touchpads start small and speed up (and keep going with momentum),
+  // so a flick never turns into zooming halfway; a wheel notch starts with a big step.
+  const WHEEL_GAP = 250;
+  const wheelBurst = { until: -Infinity, mouse: false };
+  function looksLikeMouseWheel(e) {
+    if (e.deltaMode !== 0) return true;         // lines or pages: a wheel (Firefox reports wheels this way)
+    if (e.deltaX !== 0) return false;           // any sideways movement: a touchpad
+    const wd = e.wheelDeltaY;                   // non-standard, but Chrome, Safari and Firefox have it
+    if (typeof wd === 'number' && wd !== 0) {
+      if (wd === -3 * e.deltaY) return false;   // Chrome's touchpad signature
+      if (wd % 120 === 0) return true;          // whole wheel notches
+    }
+    return Math.abs(e.deltaY) >= 40;            // a big first step: a notch, at any browser zoom (e.g. 66.7 at 150%)
+  }
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
     const p = localPt(e);
-    const mouseNotch = !e.shiftKey && e.deltaX === 0 && (e.deltaMode === 1 || (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50));
+    if (e.timeStamp > wheelBurst.until) wheelBurst.mouse = looksLikeMouseWheel(e);
+    wheelBurst.until = e.timeStamp + WHEEL_GAP;
     if (e.ctrlKey || e.metaKey) {
       // trackpad pinch (browsers report it as ctrl+wheel) or explicit ctrl+wheel
       zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.01)), p.x, p.y);
-    } else if (mouseNotch) {
-      // classic mouse wheel: zoom like most pixel editors
-      zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, p.x, p.y);
+    } else if (wheelBurst.mouse && !e.shiftKey) {
+      // mouse wheel: zoom like most pixel editors, 1.2× a notch (100 px or 3 lines);
+      // a high-resolution wheel's smaller steps zoom proportionally less
+      const notches = e.deltaMode === 1 ? e.deltaY / 3 : e.deltaMode === 2 ? e.deltaY : e.deltaY / 100;
+      zoomAt(Math.pow(1.2, -clamp(notches, -3, 3)), p.x, p.y);
     } else {
       // trackpad two-finger scroll / shift+wheel: pan
       S.view.ox -= e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX; // browsers report shift+wheel as deltaX or deltaY

@@ -1815,6 +1815,59 @@ test('short links: an open QR code stays open when the suggestion arrives', asyn
   await simpleReady(p); await p.waitForTimeout(200);
   eq(await p.evaluate(() => !document.querySelector('#linkQrBox').hidden), true, 'QR still shown');
 });
+// ---------- 1.3: mouse wheel zooms, touchpad scroll pans ----------
+// Send a burst of wheel events (as one device would) and report what each did to the view.
+async function wheelBurst(p, events) {
+  return p.evaluate((events) => {
+    const v = document.querySelector('#viewport'), r = v.getBoundingClientRect(), out = [];
+    for (const ev of events) {
+      const before = { ...__pindou.S.view };
+      const e = new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, deltaMode: 0, deltaX: 0, ...ev });
+      if (ev.wheelDeltaY !== undefined) Object.defineProperty(e, 'wheelDeltaY', { value: ev.wheelDeltaY });
+      v.dispatchEvent(e);
+      const after = __pindou.S.view;
+      out.push(after.scale !== before.scale ? 'zoom' : (after.ox !== before.ox || after.oy !== before.oy) ? 'pan' : 'none');
+    }
+    return out;
+  }, events);
+}
+const gap = (p) => p.waitForTimeout(350); // longer than a burst's 250 ms
+test('wheel: mouse wheels zoom, in each browser\'s way of reporting them', async (p) => {
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }, { deltaY: 100, wheelDeltaY: -120 }]), ['zoom', 'zoom'], 'Chrome/Edge notch');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: -66.66666, wheelDeltaY: 120 }]), ['zoom'], 'Chrome notch at 150% page zoom');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 3, deltaMode: 1 }]), ['zoom'], 'Firefox notch (lines)');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 53 }]), ['zoom'], 'a notch with no wheelDeltaY');
+});
+test('wheel: a touchpad pans, even when a flick speeds up into big steps', async (p) => {
+  eq(await wheelBurst(p, [{ deltaY: 1.5 }, { deltaY: 6 }, { deltaY: 18 }, { deltaY: 60 }, { deltaY: 120 }, { deltaY: 80 }]), ['pan', 'pan', 'pan', 'pan', 'pan', 'pan'], 'a flick');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 40, wheelDeltaY: -120 }]), ['pan'], 'Chrome touchpad signature (wheelDeltaY = -3 × deltaY)');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaX: 4, deltaY: 50 }]), ['pan'], 'any sideways movement');
+});
+test('wheel: each burst is judged afresh; Ctrl zooms and Shift pans whatever the device', async (p) => {
+  eq(await wheelBurst(p, [{ deltaY: 2 }]), ['pan'], 'touchpad');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120 }]), ['zoom'], 'then a mouse');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 2, ctrlKey: true }]), ['zoom'], 'touchpad pinch (Ctrl+wheel)');
+  await gap(p);
+  eq(await wheelBurst(p, [{ deltaY: 100, wheelDeltaY: -120, shiftKey: true }]), ['pan'], 'Shift+wheel');
+});
+test('wheel: a high-resolution wheel zooms in proportion, not a full step per event', async (p) => {
+  const s = await p.evaluate(() => __pindou.S.view.scale);
+  await wheelBurst(p, [{ deltaY: -100, wheelDeltaY: 120 }]);
+  const one = await p.evaluate(() => __pindou.S.view.scale) / s;
+  await gap(p);
+  const s2 = await p.evaluate(() => __pindou.S.view.scale);
+  await wheelBurst(p, [{ deltaY: -50, wheelDeltaY: 120 }, { deltaY: -50, wheelDeltaY: 120 }]); // the same notch in two halves
+  const two = await p.evaluate(() => __pindou.S.view.scale) / s2;
+  assert(Math.abs(one - two) < 0.01, `one notch ${one.toFixed(3)}× vs two halves ${two.toFixed(3)}×`);
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';
