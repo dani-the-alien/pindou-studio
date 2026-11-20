@@ -142,6 +142,9 @@ input[type=number] { width: 80px; }
 }
 .stage-bar label { display: inline-flex; align-items: center; gap: 6px; }
 .viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; background: var(--bg); }
+.viewport:focus { outline: none; }
+.viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .viewport canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .viewport.pan, .viewport.panning { cursor: grab; }
 .viewport.panning { cursor: grabbing; }

@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.1'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.2'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -378,6 +378,12 @@
       ctx.strokeStyle = T.accent; ctx.lineWidth = 2;
       ctx.strokeRect(ox + S.hover.x * s + 1, oy + S.hover.y * s + 1, s - 2, s - 2);
     }
+    // keyboard cursor: a thick outline with a light inner line, visible on any bead color
+    if (cursorShown()) {
+      const c = S.cursor, px = ox + c.x * s, py = oy + c.y * s;
+      ctx.lineWidth = 3; ctx.strokeStyle = T.accent; ctx.strokeRect(px - 1.5, py - 1.5, s + 3, s + 3);
+      ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.strokeRect(px + 0.5, py + 0.5, s - 1, s - 1);
+    }
   }
 
   function drawRulers(s, ox, oy, x0, x1, y0, y1) {
@@ -662,6 +668,78 @@
     const v = S.cells[cell.i];
     const bead = v >= 0 ? `${S.palette[v].code} ${S.palette[v].hex}${S.palette[v].transparent ? ' (clear)' : ''}` : 'empty';
     st.textContent = `x ${cell.x + 1}, y ${cell.y + 1} · ${trayName(r, c)} peg ${(cell.x % S.tray) + 1}, ${(cell.y % S.tray) + 1} · ${bead}`;
+  }
+
+  // ---------- drawing from the keyboard ----------
+  // The canvas takes keyboard focus. Arrows move a cursor cell (Shift: 10 beads), Home/End
+  // go to the ends of the row, Enter uses the current tool there and Delete/Backspace
+  // erases; each is one undo step. A live region says where the cursor is. The cursor
+  // only shows once a key is used on the canvas, so mouse and touch drawing look as before.
+  let cursorOn = false;
+  function cursorShown() {
+    return cursorOn && S.cursor && document.activeElement === viewport && S.cursor.x < S.w && S.cursor.y < S.h;
+  }
+  function cursorBounds() {
+    return S.focus ? trayRect(S.focus.r, S.focus.c) : { x: 0, y: 0, w: S.w, h: S.h };
+  }
+  function placeCursor(x, y) {
+    const b = cursorBounds();
+    S.cursor = { x: clamp(x, b.x, b.x + b.w - 1), y: clamp(y, b.y, b.y + b.h - 1) };
+    keepCursorInView();
+    requestDraw();
+    announceCursor();
+  }
+  function keepCursorInView() {
+    const s = S.view.scale, c = S.cursor, m = Math.min(s * 2, 40);
+    const px = S.view.ox + c.x * s, py = S.view.oy + c.y * s;
+    if (px < m) S.view.ox += m - px; else if (px + s > vw - m) S.view.ox -= px + s - (vw - m);
+    if (py < m) S.view.oy += m - py; else if (py + s > vh - m) S.view.oy -= py + s - (vh - m);
+  }
+  function announceCursor(done) {
+    const c = S.cursor; if (!c) return;
+    const v = S.cells[c.y * S.w + c.x];
+    const bead = v >= 0 ? S.palette[v].code : 'empty';
+    const where = trayCount() > 1 ? `${trayName(Math.floor(c.y / S.tray), Math.floor(c.x / S.tray))}, ` : '';
+    $('#canvasLive').textContent = `${done ? done + ' ' : ''}${where}column ${c.x + 1}, row ${c.y + 1}: ${bead}`;
+  }
+  function applyAtCursor(erase) {
+    if (!tab.editing || !S.cursor) return;
+    const cell = { x: S.cursor.x, y: S.cursor.y, i: S.cursor.y * S.w + S.cursor.x };
+    if (S.focus && !inFocus(cell)) return;
+    if (!erase && S.tool === 'pan') { $('#canvasLive').textContent = 'The pan tool is selected: press P for the pencil to draw.'; return; }
+    if (!erase && S.tool === 'picker') {
+      const v = S.cells[cell.i];
+      if (v >= 0) { selectColor(v); setTool('pencil'); announceCursor(`Picked ${S.palette[v].code}.`); }
+      return;
+    }
+    if (!erase && (S.tool === 'fill' || S.tool === 'replace')) {
+      runTapTool({ tool: S.tool, cell });
+      announceCursor(S.tool === 'fill' ? 'Filled.' : 'Swapped.');
+      return;
+    }
+    const v = erase || S.tool === 'eraser' ? -1 : S.color;
+    beginStroke(); setCell(cell.i, v); endStroke(); requestDraw();
+    announceCursor(v < 0 ? 'Erased.' : 'Placed.');
+  }
+  function onCanvasKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const step = e.shiftKey ? 10 : 1;
+    const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    const first = !cursorOn || !S.cursor;
+    if (moves[e.key] || e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      cursorOn = true;
+      if (first) { const b = cursorBounds(); const c = S.cursor && S.cursor.x < S.w && S.cursor.y < S.h ? S.cursor : { x: b.x, y: b.y }; placeCursor(c.x, c.y); return; }
+      const b = cursorBounds();
+      if (e.key === 'Home') placeCursor(b.x, S.cursor.y);
+      else if (e.key === 'End') placeCursor(b.x + b.w - 1, S.cursor.y);
+      else placeCursor(S.cursor.x + moves[e.key][0], S.cursor.y + moves[e.key][1]);
+      return;
+    }
+    if (cursorOn && S.cursor && (e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace')) {
+      e.preventDefault();
+      applyAtCursor(e.key !== 'Enter');
+    }
   }
 
   // ---------- tools & color ----------
@@ -2431,10 +2509,29 @@
     $('#roundBeads').addEventListener('change', (e) => { S.round = e.target.checked; savePrefs(); requestDraw(); });
 
     // tabs
-    $$('.tabs [role=tab]').forEach((t) => t.addEventListener('click', () => {
-      $$('.tabs [role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+    // (ARIA tabs pattern: one tab in the Tab order, arrows/Home/End move and select)
+    const tabs = $$('.tabs [role=tab]');
+    const selectTab = (t, focus) => {
+      tabs.forEach((x) => { const on = x === t; x.setAttribute('aria-selected', String(on)); x.tabIndex = on ? 0 : -1; });
       $$('.panel').forEach((p) => { p.hidden = p.dataset.panel !== t.dataset.tab; });
-    }));
+      if (focus) t.focus();
+    };
+    tabs.forEach((t) => t.addEventListener('click', () => selectTab(t)));
+    $('.tabs').addEventListener('keydown', (e) => {
+      const k = tabs.indexOf(document.activeElement);
+      if (k < 0) return;
+      const to = { ArrowRight: (k + 1) % tabs.length, ArrowLeft: (k - 1 + tabs.length) % tabs.length, Home: 0, End: tabs.length - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault();
+      selectTab(tabs[to], true);
+    });
+    selectTab(tabs.find((t) => t.getAttribute('aria-selected') === 'true') || tabs[0]);
+
+    // canvas from the keyboard
+    viewport.addEventListener('keydown', onCanvasKey);
+    viewport.addEventListener('pointerdown', () => { if (cursorOn) { cursorOn = false; requestDraw(); } });
+    viewport.addEventListener('blur', () => requestDraw());
+    viewport.addEventListener('focus', () => { if (cursorOn) { requestDraw(); announceCursor(); } });
 
     // palette panel
     const ps = $('#paletteSelect');

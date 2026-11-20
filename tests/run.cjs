@@ -1647,6 +1647,74 @@ test('short links: fewer colors move each dropped color to its nearest kept one'
   eq(r.nearTo, r.black, 'near-black went to black');
 });
 
+// ---------- 1.3: keyboard drawing and tabs ----------
+const cellV = (p, x, y) => p.evaluate(([x, y]) => __pindou.S.cells[y * __pindou.S.w + x], [x, y]);
+const keys = async (p, ...ks) => { for (const k of ks) await p.keyboard.press(k); };
+test('keyboard: the canvas can be reached with Tab and drawn on with arrows and Enter', async (p) => {
+  // Tab from the tool buttons reaches the canvas
+  await p.focus('[data-tool=pan]');
+  let reached = false;
+  for (let i = 0; i < 12 && !reached; i++) { await p.keyboard.press('Tab'); reached = await p.evaluate(() => document.activeElement.id === 'viewport'); }
+  assert(reached, 'Tab never reached the canvas');
+  await keys(p, 'ArrowRight'); // shows the cursor at the top-left
+  await keys(p, 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowDown', 'ArrowDown', 'Enter');
+  eq(await cellV(p, 3, 2), await p.evaluate(() => __pindou.S.color), 'bead at column 4, row 3');
+  eq(await beads(p), 1, 'beads');
+  eq(await undoLen(p), 1, 'one undo step');
+  assert(/Placed\. column 4, row 3: \w+/.test(await p.textContent('#canvasLive')), 'announced: ' + await p.textContent('#canvasLive'));
+  await keys(p, 'Delete');
+  eq(await cellV(p, 3, 2), -1, 'erased with Delete');
+  // Shift moves 10; Home/End go to the ends of the row; the edges hold
+  await keys(p, 'Shift+ArrowRight', 'Enter');
+  eq(await cellV(p, 13, 2), await p.evaluate(() => __pindou.S.color), 'Shift+ArrowRight moved 10');
+  await keys(p, 'End', 'ArrowRight', 'Enter');
+  eq(await cellV(p, 51, 2), await p.evaluate(() => __pindou.S.color), 'End, and the right edge holds');
+  await keys(p, 'Home', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'Enter');
+  eq(await cellV(p, 0, 0), await p.evaluate(() => __pindou.S.color), 'Home, and the top edge holds');
+});
+test('keyboard: Enter uses the current tool (fill, pick)', async (p) => {
+  await p.focus('#viewport'); await keys(p, 'ArrowDown', 'ArrowDown');
+  await keys(p, 'f', 'Enter');
+  eq(await beads(p), 52 * 52, 'filled');
+  await p.evaluate(() => { const S = __pindou.S; S.cells[0] = 3; }); // a different bead at the corner
+  await keys(p, 'Home', 'ArrowUp', 'ArrowUp', 'i', 'Enter');
+  eq(await p.evaluate(() => __pindou.S.color), 3, 'picked');
+  eq(await p.evaluate(() => __pindou.S.tool), 'pencil', 'back to the pencil');
+});
+test('keyboard: after a mouse click on the canvas, Enter doesn\'t paint at a hidden cursor', async (p) => {
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'ArrowRight');
+  await p.mouse.click(...await cellPoint(p, 20, 20)); // draws one bead with the mouse
+  await p.keyboard.press('Enter');
+  eq(await beads(p), 1, 'beads');
+});
+test('keyboard: in a focused tray the cursor stays in that tray', async (p) => {
+  await newDesign(p, { across: 2, down: 1 });
+  await p.evaluate(() => document.querySelector('[data-tab=trays]').click());
+  await p.keyboard.press(']'); // focus the first tray
+  await p.focus('#viewport'); await keys(p, 'ArrowRight', 'End', 'ArrowRight', 'Enter');
+  const tray = await p.evaluate(() => __pindou.S.tray);
+  eq(await cellV(p, tray - 1, 0), await p.evaluate(() => __pindou.S.color), 'bead at the tray\'s right edge');
+});
+test('keyboard: a paused tab can\'t draw from the keyboard', async (p) => {
+  const t = await secondTab(p);
+  await t.evaluate(() => { document.querySelector('#tabDialog').close(); __pindou.tab.blocked = false; }); // even if the notice were gone
+  await t.focus('#viewport'); await keys(t, 'ArrowRight', 'Enter');
+  eq(await beads(t), 0, 'beads in the paused tab');
+});
+test('tabs: one tab in the Tab order; arrows, Home and End move and select; each controls its panel', async (p) => {
+  const st = () => p.evaluate(() => [...document.querySelectorAll('.tabs [role=tab]')].map((t) => [t.dataset.tab, t.getAttribute('aria-selected'), t.tabIndex, document.getElementById(t.getAttribute('aria-controls')).hidden]));
+  eq(await st(), [['palette', 'true', 0, false], ['counts', 'false', -1, true], ['trays', 'false', -1, true]], 'start');
+  await p.focus('#tab-palette');
+  await keys(p, 'ArrowRight');
+  eq(await st(), [['palette', 'false', -1, true], ['counts', 'true', 0, false], ['trays', 'false', -1, true]], 'ArrowRight');
+  eq(await p.evaluate(() => document.activeElement.id), 'tab-counts', 'focus');
+  await keys(p, 'End'); eq((await st())[2][1], 'true', 'End');
+  await keys(p, 'ArrowRight'); eq((await st())[0][1], 'true', 'wraps to the first');
+  await keys(p, 'ArrowLeft'); eq((await st())[2][1], 'true', 'wraps to the last');
+  await keys(p, 'Home'); eq((await st())[0][1], 'true', 'Home');
+  eq(await p.evaluate(() => [...document.querySelectorAll('[role=tabpanel]')].every((x) => document.getElementById(x.getAttribute('aria-labelledby')).getAttribute('aria-controls') === x.id)), true, 'panels labelled by their tabs');
+});
+
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';
