@@ -1072,8 +1072,10 @@ async function shareUrl(p) {
   await p.waitForFunction(() => document.querySelector('#linkDialog').open);
   const url = await p.inputValue('#linkText');
   await p.click('#linkDialog button[value=close]');
-  return url;
+  // the tests run on 127.0.0.1, so links point at the public site: open them here instead
+  return url.replace(PUBLIC_URL, p.url().split('#')[0]);
 }
+const PUBLIC_URL = 'https://dani-the-alien.github.io/pindou-studio/';
 async function openLink(browser, url) { // a fresh browser profile, as if someone else opened it
   const ctx = await browser.newContext();
   const t = await ctx.newPage();
@@ -1093,6 +1095,7 @@ test('share link: a design survives the trip through a link into another browser
   await p.click('[data-tool=fill]'); await p.mouse.click(...await cellPoint(p, 30, 30));
   const url = await shareUrl(p);
   assert(url.startsWith(p.url().split('#')[0] + '#pattern='), 'not a pattern link: ' + url.slice(0, 80));
+  assert((await p.inputValue('#linkText')).startsWith(PUBLIC_URL + '#pattern='), 'a link made on 127.0.0.1 should point at the public site');
   const t = await openLink(browser, url);
   eq(await design(t), await design(p), 'design in the other browser');
   eq(await hashOf(t), '', 'pattern left in the address');
@@ -1385,6 +1388,179 @@ test('opening a file or link with many unknown codes lists only some of them', a
   assert(/and 480 more/.test(txt) && txt.length < 600, 'message: ' + txt.slice(0, 120) + '… (' + txt.length + ' chars)');
 });
 
+// ---------- 1.3: QR codes ----------
+// Decode a canvas (or an image's data URL) on the page with jsQR (tests/vendor, test-only).
+async function decodeQr(p, how) {
+  if (!(await p.evaluate(() => !!window.jsQR))) await p.addScriptTag({ path: path.join(ROOT, 'tests/vendor/jsQR.js') });
+  return p.evaluate(async (how) => {
+    let c;
+    if (how.selector) c = document.querySelector(how.selector);
+    else {
+      const img = new Image(); img.src = how.dataUrl; await img.decode();
+      c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      if (how.crop) { const d = g.getImageData(...how.crop); c.width = how.crop[2]; c.height = how.crop[3]; g.putImageData(d, 0, 0); }
+    }
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+    const r = jsQR(d.data, d.width, d.height);
+    return r ? r.data : null;
+  }, how);
+}
+const noisy = (p, n) => p.evaluate((n) => {
+  const pal = __pindou.S.palette;
+  __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'noise', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.map((c) => c.code), cells: Array.from({ length: n * n }, () => (Math.random() * pal.length) | 0) });
+}, n);
+
+test('QR: the Share dialog shows a QR code that scans to the exact link', async (p) => {
+  await stroke(p, 9);
+  await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+  eq(await p.evaluate(() => document.querySelector('#linkQrBox').hidden), true, 'QR shown before asking');
+  await p.click('#linkQrBtn');
+  // decode what's on the screen, not the canvas's own pixels
+  const shot = await p.locator('#linkQrBox canvas').screenshot();
+  eq(await decodeQr(p, { dataUrl: 'data:image/png;base64,' + shot.toString('base64') }), await p.inputValue('#linkText'), 'decoded QR on screen');
+  assert(await tappable(p, '#linkQrBtn'), 'button not tappable');
+  await p.click('#linkQrBtn');
+  eq(await p.evaluate(() => document.querySelector('#linkQrBox').hidden), true, 'Hide QR code');
+});
+test('QR: a link too long for a QR code says so instead', async (p) => {
+  await noisy(p, 60); // a link of several thousand characters: fits a link, not a QR code
+  await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+  const len = (await p.inputValue('#linkText')).length;
+  assert(len > 3000 && len < 32000, 'test design gave a link of ' + len);
+  eq([await p.isDisabled('#linkQrBtn'), await p.textContent('#linkQrBtn')], [true, 'Too long for a QR code'], 'button');
+});
+test('QR: the export toggle stays in the menu, is remembered, and says whether it is on', async (p) => {
+  await p.click('[data-action=toggle-export]');
+  await p.click('[data-action=toggle-qr]');
+  eq(await p.evaluate(() => !document.querySelector('#exportMenu').hidden), true, 'menu closed by the toggle');
+  eq(await p.getAttribute('[data-action=toggle-qr]', 'aria-pressed'), 'true', 'pressed');
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady);
+  eq(await p.getAttribute('[data-action=toggle-qr]', 'aria-pressed'), 'true', 'after reload');
+});
+test('QR: with the toggle on, the PNG export carries a QR code of the design\'s link', async (p) => {
+  await stroke(p, 9);
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  const dl = p.waitForEvent('download');
+  await p.click('[data-action=export-png]');
+  const buf = require('fs').readFileSync(await (await dl).path());
+  const want = await p.evaluate(() => __pindou.currentLink());
+  const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+  // the QR sits at the bottom left, above the credit line
+  const size = await p.evaluate(async (u) => { const i = new Image(); i.src = u; await i.decode(); return [i.width, i.height]; }, dataUrl);
+  const got = await decodeQr(p, { dataUrl, crop: [0, Math.round(size[1] * 0.55), size[0], size[1] - Math.round(size[1] * 0.55)] });
+  eq(got, want, 'decoded QR in the PNG');
+  // and it opens this design
+  const d = await p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length, got);
+  eq(d, 9, 'beads in the QR\'s design');
+});
+test('QR: a PNG export whose link is too long for a QR code says so and has none', async (p) => {
+  await noisy(p, 60);
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  const dl = p.waitForEvent('download');
+  await p.click('[data-action=export-png]'); await dl;
+  assert(/too long for a QR code/.test(await p.textContent('#toastText')), 'no message');
+});
+test('QR: printing with the toggle on adds a last page whose QR code opens the design', async (p) => {
+  await stroke(p, 9);
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  await p.evaluate(() => { window.print = () => { window.__printed = true; }; });
+  await p.click('[data-action=print-trays]');
+  await p.waitForFunction(() => window.__printed);
+  const last = await p.evaluate(() => { const s = [...document.querySelectorAll('#printRoot .sheet')].pop(); return { qr: !!s.querySelector('canvas.sheet-qr'), w: s.querySelector('canvas.sheet-qr')?.style.width }; });
+  eq(last.qr, true, 'QR page');
+  assert(/mm$/.test(last.w) && parseFloat(last.w) >= 40, 'printed size ' + last.w);
+  eq(await decodeQr(p, { selector: '#printRoot .sheet:last-child canvas.sheet-qr' }), await p.evaluate(() => __pindou.currentLink()), 'decoded');
+  // without the toggle, no QR page
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  await p.click('[data-action=print-trays]');
+  eq(await p.evaluate(() => !!document.querySelector('#printRoot canvas.sheet-qr')), false, 'QR page with the toggle off');
+});
+test('QR: Ctrl+P straight after an edit never prints an out-of-date QR code', async (p) => {
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]'); await p.keyboard.press('Escape');
+  await stroke(p, 5); await p.waitForTimeout(1200); // link for 5 beads is ready
+  await p.click('[data-tool=pencil]'); await p.mouse.click(...await cellPoint(p, 30, 30)); // now 6
+  await p.evaluate(() => { document.querySelector('#printRoot').innerHTML = ''; window.dispatchEvent(new Event('beforeprint')); });
+  const qrNow = await p.evaluate(() => !!document.querySelector('#printRoot canvas.sheet-qr'));
+  if (qrNow) {
+    const got = await decodeQr(p, { selector: '#printRoot canvas.sheet-qr' });
+    const n = await p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length, got);
+    eq(n, 6, 'QR printed for an older design');
+  } else assert(/still being made/.test(await p.textContent('#printRoot')), 'no QR and no explanation');
+});
+
+test('QR: renaming the design updates the link the QR codes carry', async (p) => {
+  await stroke(p, 3);
+  const before = await p.evaluate(() => __pindou.currentLink());
+  await p.fill('#projectName', 'Renamed swallow');
+  const after = await p.evaluate(() => __pindou.currentLink());
+  assert(before !== after, 'link unchanged by the rename');
+  eq(await p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).name, after), 'Renamed swallow', 'name in the link');
+});
+
+for (const [label, opts, beadsN] of [['a long link, normal screen', {}, 0], ['a long link, high-density phone screen', { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 }, 0]]) {
+  test(`QR: the Share dialog's code scans from the screen (${label})`, async (p) => {
+    // a ~2,000+ character link: a dense code, where uneven module sizes stop it scanning
+    await p.evaluate(() => {
+      const pal = __pindou.S.palette, n = 62;
+      __pindou.loadProject({ format: 'pindou-studio', version: 1, name: 'dense', palette: __pindou.S.paletteId, tray: 52, w: n, h: n, legend: pal.slice(0, 12).map((c) => c.code), cells: Array.from({ length: n * n }, () => (Math.random() * 12) | 0) });
+    });
+    if (opts.viewport) { await p.tap('#moreBtn'); await p.tap('[data-action=share-link]'); } else await p.click('[data-action=share-link]');
+    await p.waitForFunction(() => document.querySelector('#linkDialog').open);
+    const link = await p.inputValue('#linkText');
+    assert(link.length > 1800 && link.length < 2900, 'test link is ' + link.length);
+    await p.click('#linkQrBtn');
+    const shot = await p.locator('#linkQrBox canvas').screenshot();
+    eq(await decodeQr(p, { dataUrl: 'data:image/png;base64,' + shot.toString('base64') }), link, 'decoded QR on screen');
+  }, opts.viewport ? { ...opts, hasTouch: true, isMobile: true } : opts);
+}
+test('QR: once the link is ready, Ctrl+P prints a QR of the current design (after an edit, and after a reload)', async (p) => {
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]'); await p.keyboard.press('Escape');
+  const printed = async () => {
+    await p.evaluate(() => { document.querySelector('#printRoot').innerHTML = ''; window.dispatchEvent(new Event('beforeprint')); });
+    const got = await decodeQr(p, { selector: '#printRoot canvas.sheet-qr' });
+    assert(got, 'no QR printed');
+    return p.evaluate(async (u) => (await __pindou.unpackDesign(u.split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length, got);
+  };
+  await stroke(p, 7); await p.waitForTimeout(1500);
+  eq(await printed(), 7, 'beads in the printed QR after an edit');
+  await p.waitForTimeout(500); // autosave
+  await p.reload(); await p.waitForFunction(() => window.__pindou); await p.evaluate(() => __pindou.tabReady); await p.waitForTimeout(1500);
+  eq(await printed(), 7, 'beads in the printed QR after a reload');
+});
+test('QR: a double click on Print opens one print dialog', async (p) => {
+  await p.click('[data-action=toggle-export]'); await p.click('[data-action=toggle-qr]');
+  await p.evaluate(() => { window.__prints = 0; window.print = () => { window.__prints++; }; });
+  await stroke(p, 4);
+  await p.evaluate(() => { const b = document.querySelector('[data-action=print-trays]'); b.click(); b.click(); });
+  await p.waitForTimeout(800);
+  eq(await p.evaluate(() => window.__prints), 1, 'print dialogs');
+});
+test('QR: the export toggle is announced by its words, not the box drawn before them', async (p) => {
+  await p.click('[data-action=toggle-export]');
+  eq(await p.getByRole('button', { name: 'Add a QR code (PNG & print)', exact: true }).count(), 1, 'button with that exact name');
+});
+test('share link: addresses that only work on this computer are recognised', async (p) => {
+  const r = await p.evaluate(() => {
+    const host = (u) => new URL(u).hostname;
+    return ['http://localhost:8000/', 'http://127.0.0.1:8000/', 'http://127.1/', 'http://0.0.0.0:8000/', 'http://pindou.localhost/', 'http://[::1]:8000/', 'http://[::ffff:127.0.0.1]/', 'http://[::]:8000/',
+      'https://dani-the-alien.github.io/pindou-studio/', 'http://192.168.1.20:8000/', 'https://example.com/']
+      .map((u) => __pindou.isLocalAddress(host(u), 'http:'));
+  });
+  eq(r, [true, true, true, true, true, true, true, true, false, false, false], 'local?');
+});
+test('QR: a stroke that gets cancelled (pinch, hand-over) leaves no beads in the QR link', async (p) => {
+  await stroke(p, 3);
+  await p.click('[data-tool=pencil]');
+  await p.mouse.move(...await cellPoint(p, 2, 10)); await p.mouse.down();
+  await p.mouse.move(...await cellPoint(p, 12, 10), { steps: 6 });
+  await p.evaluate(() => __pindou.currentLink()); // a link made mid-stroke
+  await p.evaluate(() => { const v = document.querySelector('#viewport'); v.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1 })); });
+  await p.mouse.up();
+  eq(await beads(p), 3, 'beads after the cancelled stroke');
+  const n = await p.evaluate(async () => (await __pindou.unpackDesign((await __pindou.currentLink()).split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length);
+  eq(n, 3, 'beads in the QR link');
+});
 // ---------- runner ----------
 (async () => {
   const filter = process.argv[2] || '';

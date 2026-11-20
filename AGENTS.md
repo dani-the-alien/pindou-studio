@@ -9,6 +9,7 @@ Notes for anyone (human or AI assistant) changing this codebase.
 - `index.html`, `styles.css`: the page. No build step, no framework, no dependencies.
 - `js/app.js`: the whole app (drawing, trays, image conversion, files, export). `js/color.js`: color math (CIELAB, CIEDE2000, OKLCH).
 - `js/palettes.js`: **generated** from `data/*.json` by `tools/gen-palettes.py`. Don't edit it by hand.
+- `js/qrcodegen.js`: **vendored** (Project Nayuki's QR encoder, MIT, compiled once from its TypeScript; its header says how). Don't edit it by hand; to update it, replace the whole file the same way. `tests/vendor/`: test-only vendored files (jsQR, to decode QR codes in tests).
 - `desktop/`: the per-user Linux desktop installer, its local server (`serve.py`) and the install guide for assistants.
 - `tests/run.cjs`: browser tests (Node + Playwright with Chromium).
 - `tools/bump-version.sh`: keeps the version in `js/app.js` and `index.html` in sync.
@@ -23,6 +24,7 @@ Notes for anyone (human or AI assistant) changing this codebase.
 
 - **Whole-design changes go through `replaceState()`** (New/resize, Open, image import, palette switch) so they're one undo step that also restores palette and tray size. Don't mutate `S.cells`/`S.w`/`S.palette` directly for those.
 - **Cell values are indices into the current palette.** Anything that changes the palette must remap cells first (see `switchPalette()`).
+- **Links for other people use `shareBase()`,** which swaps a local address (localhost, 127.0.0.1, file:) for the public site. The address-bar switch is the exception: it keeps the tab's own address, since it's for that browser's own bookmarks. QR codes in exports need a link that's ready at once (Ctrl+P prints immediately), so `currentLink()` keeps one ready while the QR export toggle is on; anything that changes the design or its name must call `designChanged()` (`changed()` does).
 - **Project files and pattern links are untrusted input:** validate everything in `parseProject()` before changing any state. Links (`#pattern=…`, see "sharing a design as a link" in `js/app.js`) are unpacked by `unpackDesign()`, which caps how big they may unzip to, then go through `parseProject()` too. Changing what a link holds means a new `LINK_FORMAT` number, and old links must keep opening.
 - **Fill and Swap run on pointer-up,** so starting a pinch-zoom on a touchscreen doesn't trigger them.
 - **Matching uses exact CIEDE2000.** Faster approximations were measured and rejected (see the history of `convertJob()`).

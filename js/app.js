@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.2.0'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.0'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -430,6 +430,7 @@
     if (!S.stroke) return;
     for (const [i, old] of S.stroke) { S.cells[i] = old; writePix(i); }
     S.stroke = null; pixDirty = true; requestDraw();
+    designChanged(); // a link made mid-stroke has beads that are now gone
   }
   // Everything Undo needs to restore a whole-design change (New, resize, Open, image import, palette switch).
   function snapshot() { return { paletteId: S.paletteId, tray: S.tray, name: S.name, w: S.w, h: S.h, cells: S.cells.slice() }; }
@@ -471,6 +472,7 @@
   }
   // Restore a whole-design state, switching palette and tray size if it needs them.
   function applyState(st) {
+    designChanged();
     if (st.paletteId && st.paletteId !== S.paletteId) {
       setPalette(st.paletteId);
       $('#paletteSelect').value = st.paletteId;
@@ -786,6 +788,7 @@
   let panelTimer;
   function changed() {
     if (booted && tab.editing) { dirty = true; tab.everEdited = true; }
+    designChanged();
     requestDraw();
     renderStatus();
     clearTimeout(panelTimer);
@@ -1057,12 +1060,65 @@
     const data = linkInAddress();
     return data != null && data !== ownLink() ? data : null;
   }
+  // Where links (and QR codes) for other people point: this address, unless it only works
+  // on this computer (a local copy or the desktop install), then the public site.
+  const PUBLIC_URL = 'https://dani-the-alien.github.io/pindou-studio/';
+  // Addresses that only work on this computer: localhost (and *.localhost), 0.0.0.0 (as
+  // python -m http.server prints it), 127.x.x.x, ::1 and its IPv4-mapped form, [::] (as servers listening on all addresses print it), file:.
+  function isLocalAddress(host, protocol) {
+    return protocol === 'file:'
+      || /^(localhost\.?|.*\.localhost\.?|0\.0\.0\.0|\[::\]|127(\.\d+){3}|\[::1\]|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\])$/i.test(host);
+  }
+  function shareBase() {
+    return isLocalAddress(location.hostname, location.protocol) ? PUBLIC_URL : location.href.split('#')[0];
+  }
+  // A link to the current design for others, kept ready for exports (the browser's own
+  // Ctrl+P prints at once, while making a link takes a moment). null if it can't be made.
+  let designRev = 0, linkWarmTimer = null;
+  const linkCache = { rev: -1, url: null, pendingRev: -1, pending: null };
+  function currentLink() {
+    const rev = designRev;
+    if (linkCache.rev === rev) return Promise.resolve(linkCache.url);
+    if (linkCache.pendingRev === rev) return linkCache.pending;
+    const d = serialize();
+    linkCache.pendingRev = S.stroke ? -1 : rev;
+    const midStroke = !!S.stroke; // not kept: the stroke may yet be cancelled
+    linkCache.pending = packDesign(d).then((p) => shareBase() + '#' + LINK_KEY + p, () => null).then((url) => {
+      if (designRev === rev && !midStroke) { linkCache.rev = rev; linkCache.url = url; }
+      return url;
+    });
+    return linkCache.pending;
+  }
+  function freshLink() { return linkCache.rev === designRev ? linkCache.url : undefined; } // undefined: not ready
+  function designChanged() {
+    designRev++;
+    if (S.qrExport) { clearTimeout(linkWarmTimer); linkWarmTimer = setTimeout(currentLink, 700); }
+  }
+
+  // ---------- QR codes ----------
+  // Encoded by js/qrcodegen.js (Project Nayuki, MIT). A QR code holds at most ~2,950
+  // bytes, so longer links get none.
+  function makeQr(url) {
+    if (!url || typeof qrcodegen === 'undefined') return null;
+    try { return qrcodegen.QrCode.encodeText(url, qrcodegen.QrCode.Ecc.LOW); } catch { return null; }
+  }
+  // Black on white with the standard 4-module quiet zone, `px` pixels per module.
+  function qrCanvas(qr, px) {
+    const n = qr.size + 8, c = document.createElement('canvas');
+    c.width = c.height = n * px;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#000';
+    for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) if (qr.getModule(x, y)) g.fillRect((x + 4) * px, (y + 4) * px, px, px);
+    return c;
+  }
+  const QR_MAX_NOTE = 'QR codes hold links up to about 2,900 characters';
   function clearLinkFromAddress() { history.replaceState(history.state, '', location.pathname + location.search); }
 
   async function shareLink() {
     if (!tab.editing) return;
     let url;
-    try { url = location.href.split('#')[0] + '#' + LINK_KEY + await packDesign(serialize()); }
+    try { url = shareBase() + '#' + LINK_KEY + await packDesign(serialize()); }
     catch { toast("This browser can't make pattern links. Use Save and share the file instead.", { sticky: true }); return; }
     if (!tab.editing) return;
     if (url.length > LINK_MAX) {
@@ -1077,6 +1133,11 @@
     $('#linkCopyLabel').textContent = 'Copy link';
     $('#linkLive').checked = linkLive;
     $('#linkLiveRow').hidden = !linkCodec;
+    const canQr = !!makeQr(url);
+    $('#linkQrBox').hidden = true; $('#linkQrBox').replaceChildren();
+    $('#linkQrBtn').disabled = !canQr;
+    $('#linkQrBtn').textContent = canQr ? 'Show QR code' : 'Too long for a QR code';
+    $('#linkQrBtn').title = canQr ? 'Show this link as a QR code to scan with a phone' : QR_MAX_NOTE;
     showDialog($('#linkDialog'));
     $('#linkText').select();
   }
@@ -1123,6 +1184,23 @@
     if (state.w !== S.w || state.h !== S.h || state.paletteId !== S.paletteId || state.tray !== S.tray || name !== S.name) return false;
     for (let i = 0; i < state.cells.length; i++) if (state.cells[i] !== S.cells[i]) return false;
     return true;
+  }
+  function toggleLinkQr() {
+    const box = $('#linkQrBox');
+    if (!box.hidden) { box.hidden = true; box.replaceChildren(); $('#linkQrBtn').textContent = 'Show QR code'; return; }
+    const qr = makeQr($('#linkText').value);
+    if (!qr) return;
+    box.hidden = false;
+    // Every module the same whole number of screen pixels: a stretched code scans badly.
+    const dpr = window.devicePixelRatio || 1, n = qr.size + 8;
+    const room = Math.min(480, box.clientWidth || 340);
+    const k = Math.max(1, Math.floor(room * dpr / n));
+    const c = qrCanvas(qr, k);
+    c.style.width = c.style.height = `${(n * k) / dpr}px`;
+    c.className = 'qr'; c.setAttribute('role', 'img'); c.setAttribute('aria-label', 'QR code of the link');
+    const note = document.createElement('p'); note.className = 'hint'; note.textContent = 'Scan it with a phone camera to open this design in Pindou Studio.';
+    box.replaceChildren(c, note);
+    $('#linkQrBtn').textContent = 'Hide QR code';
   }
   async function copyLink() {
     const input = $('#linkText');
@@ -1556,7 +1634,9 @@
     return cv;
   }
 
-  function exportPng() {
+  async function exportPng() {
+    // The link is taken now, with the drawing below, so the QR matches the pattern.
+    const linkP = S.qrExport ? currentLink() : null;
     const cs = clamp(Math.floor(5000 / Math.max(S.w, S.h)), 4, 24);
     const pattern = renderRegion({ x: 0, y: 0, w: S.w, h: S.h }, cs, { codes: true, rulers: true });
     const list = usedList(countRegion(), 'code');
@@ -1565,15 +1645,26 @@
     const cols = Math.max(1, Math.floor((pattern.width - 20) / colW));
     const rows = Math.ceil(list.length / cols);
     const head = 56;
+    const name = S.name, info = `${S.w}×${S.h} beads · ${traysAcross()}×${traysDown()} trays of ${S.tray} · ${fmt(total)} beads · ${list.length} colors · ${PALETTES[S.paletteId].name}`;
+    let qr = null;
+    if (linkP) {
+      const url = await linkP;
+      qr = makeQr(url);
+      if (!qr) toast(url ? `This design's link is too long for a QR code (${QR_MAX_NOTE}), so the PNG has none.` : "This browser can't make design links, so the PNG has no QR code.");
+    }
     const out = document.createElement('canvas');
     const foot = 28;
-    out.width = Math.max(pattern.width, 480); out.height = head + pattern.height + 30 + rows * rowH + 20 + foot;
+    // about a fifth of the image wide, so it still scans when the PNG is printed to fit a page
+    const qrPx = qr ? Math.max(4, Math.floor(Math.max(pattern.width, 480) / 5 / (qr.size + 8))) : 0;
+    const qrImg = qr ? qrCanvas(qr, qrPx) : null, qrH = qrImg ? qrImg.height + 16 : 0;
+    out.width = Math.max(pattern.width, 480, qrImg ? qrImg.width + 24 + 260 : 0);
+    out.height = head + pattern.height + 30 + rows * rowH + 20 + qrH + foot;
     const g = out.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, out.width, out.height);
     g.fillStyle = '#111'; g.font = '700 20px system-ui, sans-serif'; g.textBaseline = 'top';
-    g.fillText(S.name, 12, 10);
+    g.fillText(name, 12, 10);
     g.font = '13px system-ui, sans-serif'; g.fillStyle = '#555';
-    g.fillText(`${S.w}×${S.h} beads · ${traysAcross()}×${traysDown()} trays of ${S.tray} · ${fmt(total)} beads · ${list.length} colors · ${PALETTES[S.paletteId].name}`, 12, 34);
+    g.fillText(info, 12, 34);
     g.drawImage(pattern, 0, head);
     let y0 = head + pattern.height + 20;
     g.font = '600 13px system-ui, sans-serif'; g.textBaseline = 'middle';
@@ -1584,9 +1675,17 @@
       g.strokeStyle = '#999'; g.strokeRect(x + 0.5, y + 0.5, 17, 17);
       g.fillStyle = '#111'; g.fillText(`${c.code}  × ${fmt(n)}`, x + 26, y + 9);
     });
+    if (qrImg) {
+      const qy = y0 + rows * rowH + 16;
+      g.drawImage(qrImg, 12, qy);
+      g.fillStyle = '#111'; g.font = '600 14px system-ui, sans-serif'; g.textBaseline = 'top';
+      g.fillText('Scan to open this design', qrImg.width + 28, qy + 16);
+      g.font = '13px system-ui, sans-serif'; g.fillStyle = '#555';
+      g.fillText('in Pindou Studio', qrImg.width + 28, qy + 36);
+    }
     g.font = '12px system-ui, sans-serif'; g.fillStyle = '#666'; g.textBaseline = 'bottom';
     g.fillText(CREDIT, 12, out.height - 10);
-    out.toBlob((b) => download(safeName(S.name) + '.png', b), 'image/png');
+    out.toBlob((b) => download(safeName(name) + '.png', b), 'image/png');
   }
 
   function exportCsv() {
@@ -1601,7 +1700,14 @@
     download(safeName(S.name) + '-beads.csv', new Blob(['﻿' + lines.join('\n') + '\n'], { type: 'text/csv' }));
   }
 
-  function printTrays() {
+  let printing = false;
+  async function printTrays() {
+    if (printing) return; // a double click
+    printing = true;
+    try {
+      // so the QR page is ready (again if the design changed meanwhile)
+      for (let i = 0; S.qrExport && freshLink() === undefined && i < 3; i++) await currentLink();
+    } finally { printing = false; }
     buildPrintSheets();
     saveBeforeDialog();
     window.print();
@@ -1637,6 +1743,29 @@
           `Tray ${r * traysAcross() + c + 1} of ${trayCount()} · columns ${t.x + 1}–${t.x + t.w}, rows ${t.y + 1}–${t.y + t.h} of the full design · ${fmt(n)} beads`,
           renderRegion(t, cs, { codes: true, rulers: true }), list);
       }
+    }
+    if (S.qrExport) {
+      // a last page with the design's QR code
+      const sec = document.createElement('section'); sec.className = 'sheet sheet-qr-page';
+      const url = freshLink();
+      const qr = makeQr(url);
+      sec.innerHTML = `<div class="sheet-head"><h2>${escapeHtml(S.name)}: scan to open this design</h2><div class="sheet-credit">${escapeHtml(CREDIT)}</div></div>`;
+      if (qr) {
+        const c = qrCanvas(qr, 8); c.className = 'sheet-qr';
+        c.style.width = c.style.height = `${Math.max(40, (qr.size + 8) * 0.5)}mm`; // ~0.5 mm a module scans well
+        sec.appendChild(c);
+        const p = document.createElement('p'); p.className = 'sheet-sub';
+        p.textContent = 'Scan with a phone camera to open this design in Pindou Studio, ready to edit, count or print.';
+        sec.appendChild(p);
+      } else {
+        const p = document.createElement('p'); p.className = 'sheet-sub';
+        p.textContent = url === undefined
+          ? 'The QR code was still being made when printing started. Print again from Export → Print per-tray sheets to include it.'
+          : url === null ? "This browser can't make design links, so there's no QR code."
+            : `This design's link is too long for a QR code (${QR_MAX_NOTE}). Save the design as a file to share it instead.`;
+        sec.appendChild(p);
+      }
+      root.appendChild(sec);
     }
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -2015,7 +2144,7 @@
       const b = e.target.closest('[data-action]');
       if (!b) { if (!e.target.closest('.menu')) closeMenu(); return; }
       const a = b.dataset.action;
-      if (a !== 'toggle-export') closeMenu();
+      if (a !== 'toggle-export' && a !== 'toggle-qr') closeMenu();
       switch (a) {
         case 'new': openNewDialog(); break;
         case 'import-image': openImageDialog(); break;
@@ -2024,6 +2153,7 @@
         case 'share-link': shareLink(); break;
         case 'toggle-export': if ($('#exportMenu').hidden) openMenu(); else closeMenu(); break;
         case 'export-png': exportPng(); break;
+        case 'toggle-qr': setQrExport(!S.qrExport); break;
         case 'export-csv': exportCsv(); break;
         case 'print-trays': printTrays(); break;
         case 'undo': undo(); break;
@@ -2044,7 +2174,7 @@
     document.addEventListener('click', (e) => {
       if (!$('#fileActions').classList.contains('open') || e.target.closest('#moreBtn')) return;
       const b = e.target.closest('#fileActions button, #fileActions a');
-      if (b && b.dataset.action === 'toggle-export') return; // opens its submenu inside the menu
+      if (b && (b.dataset.action === 'toggle-export' || b.dataset.action === 'toggle-qr')) return; // stays inside the menu
       if (b) setMore(false, $('#fileActions').contains(document.activeElement));
       else if (!e.target.closest('#fileActions')) setMore(false, false);
     }, true);
@@ -2145,7 +2275,7 @@
     }));
     $('#projectName').addEventListener('input', (e) => {
       if (!tab.editing) { e.target.value = S.name; return; }
-      S.name = e.target.value; dirty = true; autosave();
+      S.name = e.target.value; dirty = true; autosave(); designChanged();
     });
 
     $('#traySize').addEventListener('change', (e) => {
@@ -2220,6 +2350,7 @@
 
     // open file
     $('#linkCopy').addEventListener('click', copyLink);
+    $('#linkQrBtn').addEventListener('click', toggleLinkQr);
     $('#linkLive').addEventListener('change', (e) => setLinkLive(e.target.checked));
     $('#linkShare').addEventListener('click', () => {
       navigator.share({ title: S.name, url: $('#linkText').value }).catch(() => { /* cancelled */ });
@@ -2394,7 +2525,13 @@
     if (returnFocus) t.focus();
   }
 
-  function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview }); }
+  function savePrefs() { store.set('pindou.prefs', { guides: S.guides, showCodes: S.showCodes, round: S.round, pview: S.pview, qr: S.qrExport }); }
+  function setQrExport(on) {
+    S.qrExport = on;
+    $('[data-action=toggle-qr]').setAttribute('aria-pressed', String(on));
+    savePrefs();
+    if (on) currentLink();
+  }
 
   // ---------- boot ----------
   // If the page and this script come from different versions (a browser reused a
@@ -2413,6 +2550,8 @@
     if (prefs.showCodes != null) S.showCodes = prefs.showCodes;
     if (prefs.round != null) S.round = prefs.round;
     if (prefs.pview && PALETTE_VIEWS[prefs.pview]) S.pview = prefs.pview;
+    S.qrExport = prefs.qr === true;
+    $('[data-action=toggle-qr]').setAttribute('aria-pressed', String(S.qrExport));
     $('#guides').value = String(S.guides); $('#showCodes').checked = S.showCodes; $('#roundBeads').checked = S.round;
 
     setPalette(S.paletteId);
@@ -2441,6 +2580,6 @@
   let tabReady = Promise.resolve();
 
   // Exposed for automated tests only.
-  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, get tabReady() { return tabReady; } };
+  window.__pindou = { VERSION, S, convert, serialize, parseProject, loadProject, countRegion, undo, redo, imgState, runConvert, tab, packDesign, unpackDesign, LINK_MAX, currentLink, isLocalAddress, get tabReady() { return tabReady; } };
   boot();
 })();

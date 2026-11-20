@@ -42,7 +42,8 @@ Your current design autosaves in the browser, **tied to that exact address and b
 - **My collection**: mark which colors you own, then filter the palette or limit image conversion to them.
 - **Phones, tablets and foldables**: on a phone the tools sit along the bottom and a row of quick colors (current, recent, and the colors in your design) is always in reach; ▴ opens the full palette and panels as a sheet. Small screens fold New/Image/Open/Save/Export into a ⋯ menu. Tablets in portrait dock the panels under the canvas. A foldable bent at its hinge puts the canvas on one half and the controls on the other.
 - **Exports say where they came from**: PNG patterns and printed sheets carry a small "Made with Pindou Studio" line with the app's address.
-- **Share as a link**: **Share** puts the whole design into a link (in the part after `#`, which browsers don't send to any server), ready to copy or send. Opening it gives the other person their own copy; if they already have a design open, they're asked first, and Undo brings theirs back. Very detailed designs (most photo conversions bigger than about 100 × 100) don't fit in a link; save the file for those. To bookmark a design, turn on **Keep this design's link in the address bar** in the Share dialog, then bookmark the page as usual.
+- **Share as a link**: **Share** puts the whole design into a link (in the part after `#`, which browsers don't send to any server), ready to copy or send. Opening it gives the other person their own copy; if they already have a design open, they're asked first, and Undo brings theirs back. Very detailed designs (most photo conversions bigger than about 100 × 100) don't fit in a link; save the file for those. To bookmark a design, turn on **Keep this design's link in the address bar** in the Share dialog, then bookmark the page as usual. Links made in a copy running on your own computer (`localhost`, `127.0.0.1`, the desktop install) point at the public site, so they work for whoever you send them to.
+- **QR codes**: **Show QR code** in the Share dialog turns the link into a QR code to scan with a phone. In the Export menu, **Add a QR code (PNG & print)** puts one below the legend of the PNG and on an extra last page when printing. A QR code holds links up to about 2,900 characters, which fits most simple designs; a one-tray, 8–16 color line-art design comes to roughly 500–1,200.
 
 ## Shortcuts
 
@@ -92,6 +93,7 @@ H1 is treated as the clear (transparent) bead and is never used when converting 
 - **CIEDE2000** color difference, implemented following G. Sharma, W. Wu & E. N. Dalal, "The CIEDE2000 color-difference formula: implementation notes, supplementary test data, and mathematical observations", *Color Research & Application* 30(1), 2005, and checked against their test data.
 - **OKLab / OKLCH** color space by Björn Ottosson (2020), used to sort and group the palette.
 - **Dithering** uses the Floyd–Steinberg error-diffusion algorithm (1976).
+- **QR codes** are encoded by Project Nayuki's [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library) (MIT), included as `js/qrcodegen.js`. The tests check them with [jsQR](https://github.com/cozmo/jsQR) by Cosmo Wolfe (Apache 2.0), kept in `tests/vendor/` and not part of the app.
 
 ## License
 
