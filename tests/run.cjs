@@ -1534,11 +1534,23 @@ test('QR: the export toggle is announced by its words, not the box drawn before 
 test('share link: addresses that only work on this computer are recognised', async (p) => {
   const r = await p.evaluate(() => {
     const host = (u) => new URL(u).hostname;
-    return ['http://localhost:8000/', 'http://127.0.0.1:8000/', 'http://127.1/', 'http://0.0.0.0:8000/', 'http://pindou.localhost/', 'http://[::1]:8000/', 'http://[::ffff:127.0.0.1]/',
+    return ['http://localhost:8000/', 'http://127.0.0.1:8000/', 'http://127.1/', 'http://0.0.0.0:8000/', 'http://pindou.localhost/', 'http://[::1]:8000/', 'http://[::ffff:127.0.0.1]/', 'http://[::]:8000/',
       'https://dani-the-alien.github.io/pindou-studio/', 'http://192.168.1.20:8000/', 'https://example.com/']
       .map((u) => __pindou.isLocalAddress(host(u), 'http:'));
   });
-  eq(r, [true, true, true, true, true, true, true, false, false, false], 'local?');
+  eq(r, [true, true, true, true, true, true, true, true, false, false, false], 'local?');
+});
+test('QR: a stroke that gets cancelled (pinch, hand-over) leaves no beads in the QR link', async (p) => {
+  await stroke(p, 3);
+  await p.click('[data-tool=pencil]');
+  await p.mouse.move(...await cellPoint(p, 2, 10)); await p.mouse.down();
+  await p.mouse.move(...await cellPoint(p, 12, 10), { steps: 6 });
+  await p.evaluate(() => __pindou.currentLink()); // a link made mid-stroke
+  await p.evaluate(() => { const v = document.querySelector('#viewport'); v.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1 })); });
+  await p.mouse.up();
+  eq(await beads(p), 3, 'beads after the cancelled stroke');
+  const n = await p.evaluate(async () => (await __pindou.unpackDesign((await __pindou.currentLink()).split('#pattern=')[1])).state.cells.filter((v) => v >= 0).length);
+  eq(n, 3, 'beads in the QR link');
 });
 // ---------- 1.3: a simpler version for long links ----------
 const shareOpen = async (p) => { await p.click('[data-action=share-link]'); await p.waitForFunction(() => document.querySelector('#linkDialog').open); };
