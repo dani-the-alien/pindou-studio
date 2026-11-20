@@ -249,22 +249,167 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 .print-root { display: none; }
 
-/* Narrow screens: sidebar moves under the canvas */
-@media (max-width: 860px) {
-  .toast { inset: calc(env(safe-area-inset-top, 0px) + 8px) auto auto 50%; }
-  body { overflow: auto; }
-  .workspace { flex-direction: column; }
-  .toolbar { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; padding: 4px 8px; }
-  .tool { width: 52px; }
-  .current { margin: 0 6px; flex-direction: row; }
-  .swatch.big { width: 32px; height: 32px; }
-  .zoom { margin: 0 0 0 auto; flex-direction: row; }
-  .stage { min-height: 62vh; }
-  .sidebar { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: none; }
-  .panel { max-height: 50vh; }
+/* ---------- Layouts for different screens ----------
+   wide (default)        toolbar left, canvas, sidebar right
+   medium (< 1100 wide)  same, narrower sidebar (tablet landscape, big foldables open)
+   tall tablet           portrait and >= 600 wide: panels docked under the canvas
+   phone (< 600 wide)    tools along the bottom; the sidebar becomes a bottom sheet
+                         with a quick-color row that is always visible
+   short (<= 520 high)   phones in landscape, flip-phone cover screens: slim chrome
+   folded                a foldable bent at its hinge: canvas on one half, controls
+                         on the other (Viewport Segments)
+   Compact layouts (phone, short, tall tablet) fold the file actions into the ⋯ menu. */
+
+body { height: 100vh; height: 100dvh; }
+.topbar { padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+.file-actions { display: contents; }
+.repo-sep, .repo-link { order: 1; }
+.more-btn, .menu-version, .sheet-head { display: none; }
+
+@media (pointer: coarse) {
+  .top-actions button, .stage-bar select, .zoom button { min-height: 40px; }
+  .tool { min-height: 48px; }
+  .sw { height: 44px; }
+  .seg button { padding: 8px 10px; }
+  .tabs button { padding: 12px 10px; }
 }
 
-/* Printing: only the per-tray sheets */
+@media (max-width: 1099px) {
+  .sidebar { width: clamp(240px, 30vw, 310px); }
+  .toolbar { width: 64px; }
+  .tool { width: 54px; }
+}
+
+/* ⋯ menu for compact layouts */
+@media (max-width: 599px), (max-height: 520px), (min-width: 600px) and (max-width: 1099px) and (max-aspect-ratio: 5/6) {
+  .topbar { flex-wrap: nowrap; gap: 8px; padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 6px; }
+  .brand { flex: 1; }
+  .project-name { width: 100%; max-width: none; min-width: 0; }
+  .top-actions { flex-wrap: nowrap; position: relative; }
+  .more-btn { display: inline-block; font-size: 18px; line-height: 1; padding: 6px 12px; }
+  .file-actions {
+    display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+    flex-direction: column; align-items: stretch; gap: 2px; padding: 6px; min-width: 220px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  }
+  .file-actions.open { display: flex; }
+  .file-actions { max-height: calc(100dvh - var(--top-h, 48px) - 12px); overflow-y: auto; overscroll-behavior: contain; }
+  .file-actions .stage-bar {
+    flex-direction: column; align-items: stretch; flex-wrap: nowrap; overflow: visible; white-space: normal;
+    gap: 6px; padding: 8px 12px; margin-top: 4px; border: 0; border-top: 1px solid var(--line); background: transparent;
+  }
+  .file-actions .stage-bar label { justify-content: space-between; }
+  .file-actions > button, .file-actions .menu > button, .file-actions .repo-link { text-align: left; border-color: transparent; background: transparent; padding: 10px 12px; }
+  .file-actions .menu-pop { position: static; box-shadow: none; border: 0; padding: 0 0 0 12px; min-width: 0; }
+  .file-actions .repo-sep { display: block; width: auto; height: 1px; margin: 4px 0; order: 0; }
+  .file-actions .repo-link { order: 0; font-size: 14px; color: var(--text); }
+  .menu-version { display: block; font-size: 12px; color: var(--muted); padding: 4px 12px 2px; }
+  .edit-sep { display: none; }
+  .stage-bar { flex-wrap: nowrap; overflow-x: auto; gap: 10px; padding: 4px 10px; white-space: nowrap; scrollbar-width: thin; }
+  .stage-bar .grow, .stage-bar #sizeInfo { display: none; }
+}
+
+/* Tall tablets (iPad and similar in portrait): toolbar left, panels docked under the canvas */
+@media (min-width: 600px) and (max-width: 1099px) and (max-aspect-ratio: 5/6) {
+  .workspace { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr minmax(240px, 38%); }
+  .toolbar { grid-row: 1 / 3; }
+  .stage { grid-column: 2; grid-row: 1; min-height: 0; }
+  .sidebar { grid-column: 2; grid-row: 2; width: auto; border-left: 0; border-top: 1px solid var(--line); min-height: 0; }
+  .status { display: none; }
+}
+
+/* Phones (portrait, flip phones, foldable cover screens) */
+@media (max-width: 599px) {
+  .toast { inset: calc(env(safe-area-inset-top, 0px) + 8px) auto auto 50%; }
+  .workspace { flex-direction: column; }
+  .stage { flex: 1; min-height: 0; order: 0; }
+  .status { display: none; }
+  .sidebar { order: 1; width: auto; flex: none; border-left: 0; border-top: 1px solid var(--line); }
+  .sidebar:not(.expanded) .tabs, .sidebar:not(.expanded) .panel { display: none; }
+  .sidebar.expanded { height: 52%; }
+  .sheet-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 52px; }
+  .toolbar {
+    order: 2; width: auto; flex: none; flex-direction: row; align-items: center; gap: 2px;
+    border-right: 0; border-top: 1px solid var(--line); overflow-x: auto; overflow-y: hidden;
+    padding: 4px max(6px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+  .tool { width: auto; min-width: 48px; flex: 1 0 48px; }
+  .toolbar .current { display: none; }
+  .zoom { margin: 0 0 0 4px; flex-direction: row; }
+  .zoom button { width: 40px; }
+  .zoom [data-action=zoom-in], .zoom [data-action=zoom-out] { display: none; } /* pinch instead */
+}
+/* the quick-color row */
+.quick { flex: 1; display: flex; gap: 6px; overflow-x: auto; align-items: center; scrollbar-width: none; min-width: 0; padding: 2px; }
+.quick::-webkit-scrollbar { display: none; }
+.quick .sw { flex: none; width: 40px; height: 40px; border-radius: 9px; }
+.quick .sw.current { width: 48px; height: 48px; outline: 3px solid var(--accent); outline-offset: 1px; margin-right: 6px; }
+.quick .sw[aria-pressed="true"]:not(.current) { outline-width: 2px; }
+.quick .quick-sep { flex: none; width: 1px; height: 32px; background: var(--line); }
+.sheet-toggle { flex: none; width: 44px; height: 44px; font-size: 18px; padding: 0; }
+.sidebar.expanded .sheet-toggle { transform: rotate(180deg); }
+
+/* Short screens: phones in landscape, small cover screens */
+@media (max-height: 520px) {
+  .topbar { padding-top: max(4px, env(safe-area-inset-top)); padding-bottom: 4px; }
+  .status { display: none; }
+  .stage-bar { padding: 2px 8px; }
+  .toolbar { padding-top: 4px; padding-bottom: 4px; gap: 2px; }
+  .tool span { display: none; }
+  .tool { min-height: 40px; padding: 4px 2px; }
+  .current { margin-top: 2px; }
+  .zoom { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  .zoom button { width: 26px; }
+}
+@media (max-height: 520px) and (min-width: 600px) {
+  .sidebar { width: clamp(220px, 32vw, 300px); }
+  .tabs button { padding: 6px; }
+  .toolbar { width: 56px; }
+  .tool { width: 46px; }
+  .zoom button { width: 44px; }
+  .zoom { flex-direction: column; }
+}
+@media (max-height: 520px) and (max-width: 599px) {
+  /* tiny screens (flip-phone cover displays): everything slimmer */
+  .sheet-head { min-height: 44px; padding: 3px 6px; }
+  .quick .sw { width: 34px; height: 34px; }
+  .quick .sw.current { width: 40px; height: 40px; }
+  .sheet-toggle { width: 38px; height: 38px; }
+  .tool { min-width: 42px; flex-basis: 42px; min-height: 38px; }
+  .sidebar.expanded { height: 62%; }
+}
+
+/* Foldables bent at the hinge (Viewport Segments). Flip phone half-open (one segment
+   above the other): canvas on top, controls below the hinge. Book-style foldable
+   half-open (side by side): canvas on the left half, panels on the right. */
+@media (vertical-viewport-segments: 2) {
+  .workspace { display: flex; flex-direction: column; }
+  .stage { flex: none; height: calc(env(viewport-segment-bottom 0 0) - var(--top-h, 48px)); order: 0; }
+  .sidebar, .sidebar.expanded {
+    order: 1; flex: 1; height: auto; min-height: 0; width: auto; border-left: 0;
+    margin-top: calc(env(viewport-segment-top 0 1) - env(viewport-segment-bottom 0 0));
+  }
+  /* the phone rules hide these while the sheet is collapsed; here they always show */
+  .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
+  .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
+  .sheet-toggle { display: none; }
+  .toolbar { order: 2; }
+}
+@media (horizontal-viewport-segments: 2) {
+  .workspace { display: flex; flex-direction: row; }
+  .sidebar {
+    width: calc(100vw - env(viewport-segment-left 1 0)); height: auto; order: 2;
+    margin-left: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0));
+    border-top: 0; border-left: 1px solid var(--line);
+  }
+  .sidebar:not(.expanded) .tabs, .sidebar .tabs { display: flex; }
+  .sidebar:not(.expanded) .panel:not([hidden]), .sidebar .panel:not([hidden]) { display: block; }
+  .sheet-head, .sheet-toggle { display: none; }
+  .toolbar { order: 0; width: 64px; flex-direction: column; border-top: 0; border-right: 1px solid var(--line); }
+  .stage { order: 1; }
+}
+
 @media print {
   body { display: block; overflow: visible; background: #fff; color: #000; }
   body > *:not(.print-root) { display: none !important; }
