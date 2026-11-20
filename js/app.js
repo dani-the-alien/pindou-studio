@@ -52,7 +52,7 @@
   }
   const safeName = (s) => (s || 'pattern').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'pattern';
 
-  const VERSION = '1.3.2'; // keep in sync with index.html (tools/bump-version.sh)
+  const VERSION = '1.3.3'; // keep in sync with index.html (tools/bump-version.sh)
   const MAX_DIM = 624;
   // Printed on exports and sheets so people who see a pattern can find the app.
   const CREDIT = 'Made with Pindou Studio · dani-the-alien.github.io/pindou-studio';
@@ -633,20 +633,58 @@
   viewport.addEventListener('pointerup', endPointer);
   viewport.addEventListener('pointercancel', (e) => { if (gesture && gesture.kind === 'draw') cancelStroke(); endPointer(e); });
   viewport.addEventListener('pointerleave', () => { if (!gesture) setHover(null); });
+  // Mouse wheel (zoom) or touchpad two-finger scroll (pan)? Browsers don't say, so: a
+  // burst of wheel events (no gap over 250 ms) is judged by its first event and keeps that
+  // for the whole burst. Touchpads start small and speed up (and keep going with momentum),
+  // so a flick never turns into zooming halfway; a wheel notch starts with a big step.
+  const WHEEL_GAP = 250;
+  const wheelBurst = { until: -Infinity, mouse: false };
+  // Note: deltaMode must be read before deltaX/deltaY. Firefox turns an event's line deltas
+  // into pixels as soon as a page reads deltaX/Y first (dom.event.wheel-deltaMode-lines.disabled).
+  function looksLikeMouseWheel(e, mode) {
+    if (mode !== 0) return true;                // lines or pages: a wheel (Firefox reports wheels this way)
+    if (e.deltaX !== 0) return false;           // any sideways movement: a touchpad
+    const wd = e.wheelDeltaY;                   // non-standard, but Chrome, Safari and Firefox have it
+    if (typeof wd === 'number' && wd !== 0) {
+      if (wd === -3 * e.deltaY) return false;   // Chrome and Safari's touchpad signature (macOS)
+      if (wd % 120 === 0) return true;          // whole wheel notches, at any page zoom or scroll setting
+    }
+    // no help from wheelDeltaY: a big, whole-pixel first step is a notch (touchpads report fractions)
+    return Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 40;
+  }
+  // How many notches an event is. Chrome's wheelDeltaY counts raw notches (120 each) whatever
+  // the page zoom, scroll setting or macOS acceleration; deltaY in pixels doesn't.
+  function wheelNotches(e, mode) {
+    const wd = e.wheelDeltaY;
+    // wheelDeltaY is 120 a notch (and part-notches for high-resolution wheels) in every mode
+    if (typeof wd === 'number' && wd !== 0 && mode !== 2) return -wd / 120;
+    if (mode === 1) return e.deltaY / 3;        // Firefox without wheelDeltaY: 3 lines a notch
+    if (mode === 2) return e.deltaY;            // pages
+    return e.deltaY / 100;
+  }
   viewport.addEventListener('wheel', (e) => {
+    const mode = e.deltaMode; // first, before any delta (see above)
     e.preventDefault();
     const p = localPt(e);
-    const mouseNotch = !e.shiftKey && e.deltaX === 0 && (e.deltaMode === 1 || (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50));
+    // Only plain wheel events judge a burst: Shift turns a wheel into sideways scrolling, and
+    // Ctrl is a pinch; neither says which device it is.
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (e.timeStamp > wheelBurst.until) wheelBurst.mouse = looksLikeMouseWheel(e, mode);
+      wheelBurst.until = e.timeStamp + WHEEL_GAP;
+    }
     if (e.ctrlKey || e.metaKey) {
       // trackpad pinch (browsers report it as ctrl+wheel) or explicit ctrl+wheel
-      zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.01)), p.x, p.y);
-    } else if (mouseNotch) {
-      // classic mouse wheel: zoom like most pixel editors
-      zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, p.x, p.y);
+      zoomAt(Math.exp(-e.deltaY * (mode === 1 ? 0.05 : 0.01)), p.x, p.y);
+    } else if (wheelBurst.mouse && !e.shiftKey) {
+      // mouse wheel: zoom like most pixel editors, 1.2× a notch; a high-resolution wheel's
+      // part-notches zoom proportionally less
+      zoomAt(Math.pow(1.2, -clamp(wheelNotches(e, mode), -3, 3)), p.x, p.y);
     } else {
-      // trackpad two-finger scroll / shift+wheel: pan
-      S.view.ox -= e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX; // browsers report shift+wheel as deltaX or deltaY
-      S.view.oy -= e.shiftKey ? 0 : e.deltaY;
+      // trackpad two-finger scroll / shift+wheel: pan. Firefox reports wheels in lines (this
+      // handler reads deltaMode first, see above): about 19 px a line, as Firefox itself uses.
+      const k = mode === 1 ? 19 : mode === 2 ? vh : 1;
+      S.view.ox -= k * (e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaX); // browsers report shift+wheel as deltaX or deltaY
+      S.view.oy -= k * (e.shiftKey ? 0 : e.deltaY);
       requestDraw();
     }
   }, { passive: false });
