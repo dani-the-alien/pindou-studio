@@ -2228,8 +2228,8 @@
       // asking about a link that's no longer in the address (Back, or a newer link): drop the question
       const ask = $('#linkOpenDialog');
       if (ask.open && incomingLink() !== linkAsking) ask.close('superseded');
+      if (tab.blocked) { if (tab.state === 'paused') showTabNotice(); return; } // (re)words the notice; a link opens once this tab edits
       if (incomingLink() == null) return;
-      if (tab.blocked) { if (tab.state === 'paused') showTabNotice(); return; } // opens once this tab edits
       openLinkFromAddress();
     });
 
