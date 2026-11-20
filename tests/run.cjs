@@ -357,6 +357,7 @@ test('"Edit here instead" hands over quickly with the latest work, and back agai
   await t2.click('#tabTake');
   await t2.waitForFunction(() => !document.querySelector('#tabDialog').open);
   const ms = Date.now() - t0;
+  eq(await t2.evaluate(() => __pindou.tab.lastSync), 'message', 'the design came from the hand-over message');
   assert(ms < 700, `hand-over took ${ms} ms`);
   eq(await beads(t2), 19, 'second tab has the first tab\'s stroke');
   eq(await savedBeads(t2), 19, 'autosave');
@@ -395,6 +396,37 @@ test('a tab that is busy when another takes over never overwrites the new tab\'s
   eq(await savedBeads(t2), 52 * 52, 'autosave after the busy tab woke up');
   await t2.close({ runBeforeUnload: true });
   eq(await savedBeads(p), 52 * 52, 'autosave after the new tab closed');
+});
+test('three tabs: two take over from a busy one; the last editor still saves everything', async (p) => {
+  await stroke(p, 1); await p.waitForTimeout(500);
+  const b = await secondTab(p), c = await secondTab(p);
+  await p.evaluate(() => { setTimeout(() => { const t = performance.now(); while (performance.now() - t < 5000); }, 0); });
+  await p.waitForTimeout(50).catch(() => {});
+  await b.click('#tabTake');
+  await b.waitForTimeout(200);
+  await c.click('#tabTake'); // c's steal lands while b is still loading the latest design
+  const editor = async () => { for (let k = 0; k < 80; k++) { for (const [n, t] of [['b', b], ['c', c]]) if (await t.evaluate(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open)) return [n, t]; await b.waitForTimeout(100); } return [null, null]; };
+  await b.waitForTimeout(3500);
+  const [name, ed] = await editor();
+  assert(ed, 'nobody is editing');
+  const editing = [];
+  for (const t of [p, b, c]) editing.push(await t.evaluate(() => __pindou.tab.editing));
+  eq(editing.filter(Boolean).length, 1, `tabs editing (${editing})`);
+  await ed.click('[data-tool=fill]'); await ed.mouse.click(...await cellPoint(ed, 30, 30));
+  await ed.waitForTimeout(600);
+  eq(await savedBeads(ed), 52 * 52, `autosave after ${name}'s fill`);
+  await ed.close({ runBeforeUnload: true });
+  await p.waitForTimeout(800);
+  eq(await savedBeads(p), 52 * 52, 'autosave after the editor closed');
+});
+test('three tabs: the lock goes to the tab that asked, not another waiting tab', async (p) => {
+  const b = await secondTab(p), c = await secondTab(p);
+  await b.evaluate(() => { window.__toasts = []; new MutationObserver(() => window.__toasts.push(document.querySelector('#toastText').textContent)).observe(document.querySelector('#toastText'), { childList: true, characterData: true, subtree: true }); });
+  await c.click('#tabTake');
+  await c.waitForFunction(() => __pindou.tab.editing && !document.querySelector('#tabDialog').open);
+  await c.waitForTimeout(300);
+  eq(await b.evaluate(() => [__pindou.tab.editing, window.__toasts.length, __pindou.S.undo.length]), [false, 0, 0], 'the other waiting tab never took over');
+  eq(await c.evaluate(() => __pindou.tab.lastSync), 'message', 'c got the design by message');
 });
 test('a stroke or fill in progress when the tab loses editing is not applied', async (p) => {
   const t2 = await secondTab(p);
