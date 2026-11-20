@@ -1262,11 +1262,14 @@
     return out;
   }
   // A bead (or empty spot) unlike all of its up-to-8 neighbors takes their most common value.
+  // Clear beads are never changed, and never spread: clear plastic and white look alike.
   function removeStrays(cells, w, h) {
+    const clear = (v) => v >= 0 && S.palette[v] && S.palette[v].transparent;
     const out = Int16Array.from(cells);
     const vals = new Int16Array(8), ns = new Uint8Array(8); // up to 8 neighbors: no Map per bead
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x, v = cells[i];
+      if (clear(v)) continue;
       let kinds = 0, same = false;
       for (let dy = -1; dy <= 1 && !same; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue;
@@ -1274,6 +1277,7 @@
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
         const u = cells[ny * w + nx];
         if (u === v) { same = true; break; }
+        if (clear(u)) continue;
         let k = 0;
         while (k < kinds && vals[k] !== u) k++;
         if (k === kinds) { vals[k] = u; ns[k] = 0; kinds++; }
@@ -1296,7 +1300,7 @@
       share.dist = (a, b) => { const key = a * 1024 + b; let e = memo.get(key); if (e === undefined) { e = Color.deltaE2000(S.palette[a].lab, S.palette[b].lab); memo.set(key, e); } return e; };
     }
     const cells = simplifyCells(S.cells, S.w, S.h, max, clean, share.dropped, share.dist);
-    return { cells, max, clean, url: await linkFor(cells), colors: new Set(cells.filter((v) => v >= 0)).size };
+    return { cells, max, clean, url: await linkFor(cells), colors: solidCounts(cells).size }; // as the slider counts
   }
   const breathe = () => new Promise((r) => setTimeout(r, 0)); // let the page draw between tries
   // The color counts tried for a suggestion, most first.
@@ -1357,7 +1361,7 @@
     share.timer = setTimeout(async () => {
       let r;
       try { r = await makeSimpler(+$('#linkColors').value, $('#linkClean').checked); }
-      catch { if (seq === share.seq) { share.busy = false; share.failed = true; showLinkChoice(); } return; }
+      catch { if (seq === share.seq) { share.busy = false; share.failed = true; $('#linkSimpleLen').textContent = "(couldn't make one)"; showLinkChoice(); } return; }
       if (seq === share.seq && tab.editing && $('#linkDialog').open) showSimpler(r);
     }, 120);
   }
